@@ -10,6 +10,8 @@ import { StickyFormActions } from "@/components/forms/StickyFormActions";
 import { WizardStepNav, type WizardStep } from "@/components/experiments/WizardStepNav";
 import { LaunchReadinessPanel, type ReadinessCheck } from "@/components/experiments/LaunchReadinessPanel";
 import { VariantAllocationEditor, type AllocationVariant } from "@/components/experiments/VariantAllocationEditor";
+import { TrafficSlider } from "@/components/experiments/TrafficSlider";
+import { WizardInput, WizardTextarea, WizardCheckCard } from "@/components/experiments/WizardControls";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -85,8 +87,6 @@ interface WizardState {
 
 const inputCls =
   "w-full text-sm border border-neutral-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-400 bg-white placeholder:text-neutral-400";
-const textareaCls =
-  "w-full text-sm border border-neutral-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-400 bg-white resize-none placeholder:text-neutral-400";
 
 const DEFAULT_STATE: WizardState = {
   name: "",
@@ -174,25 +174,28 @@ function StepSetup({ state, onChange }: { state: WizardState; onChange: (p: Part
         accent={ACCENT}
       >
         <div className="space-y-4">
-          <FormField label="Test name" required hint="Describe what you are testing, e.g. 'Redesign vs Current Theme'.">
-            <input
-              type="text"
-              value={state.name}
-              onChange={(e) => onChange({ name: e.target.value })}
-              className={inputCls}
-              placeholder="Theme Redesign A/B Test"
-            />
-          </FormField>
+          <WizardInput
+            label="Test name"
+            required
+            value={state.name}
+            onChange={(v) => onChange({ name: v })}
+            placeholder="Theme Redesign A/B Test"
+            maxLength={80}
+            accentColor={ACCENT}
+            hint="Describe what you are testing — e.g. 'Redesign vs Current Theme'."
+          />
 
-          <FormField label="Hypothesis" hint="What do you expect to happen and why?">
-            <textarea
-              rows={3}
-              value={state.hypothesis}
-              onChange={(e) => onChange({ hypothesis: e.target.value })}
-              className={textareaCls}
-              placeholder="e.g. The new minimalist theme will increase conversion rate by reducing visual noise on the product page."
-            />
-          </FormField>
+          <WizardTextarea
+            label="Hypothesis"
+            value={state.hypothesis}
+            onChange={(v) => onChange({ hypothesis: v })}
+            placeholder="e.g. The new minimalist theme will increase conversion rate by reducing visual noise on the product page."
+            rows={3}
+            maxLength={400}
+            accentColor={ACCENT}
+            hint="What do you expect to happen and why?"
+            templateText="If we test [variant theme name], then [conversion rate / bounce rate] will improve because [specific UX improvement addresses a known friction point]."
+          />
         </div>
       </FormSection>
 
@@ -215,6 +218,7 @@ function StepThemeSelection({
   state,
   onChange,
   onRefresh,
+  shopDomain,
 }: {
   themes: ShopifyThemeOption[];
   loadingThemes: boolean;
@@ -222,8 +226,10 @@ function StepThemeSelection({
   state: WizardState;
   onChange: (p: Partial<WizardState>) => void;
   onRefresh: () => void;
+  shopDomain: string;
 }) {
   const publishedTheme = themes.find((t) => t.isPublished);
+  const unpublishedCount = themes.filter((t) => !t.isPublished && !t.processing).length;
 
   // Auto-select published theme as control on load
   useEffect(() => {
@@ -240,13 +246,13 @@ function StepThemeSelection({
   return (
     <div className="space-y-6">
       <FormSection
-        title="Control theme — the live theme"
-        description="The control is always the theme currently published to your store. It cannot be changed here."
+        title="Your live (control) theme"
+        description="The control is always the theme your shoppers see right now. MarginLab sets this automatically — you cannot change it."
         accent={ACCENT}
       >
         {loadingThemes && (
           <div className="flex items-center gap-2 text-sm text-neutral-500 py-6 justify-center">
-            <RefreshCw className="w-4 h-4 animate-spin" /> Loading themes from Shopify…
+            <RefreshCw className="w-4 h-4 animate-spin" /> Connecting to your Shopify store…
           </div>
         )}
 
@@ -258,9 +264,9 @@ function StepThemeSelection({
             <button
               type="button"
               onClick={onRefresh}
-              className="text-sm text-zinc-600 underline hover:no-underline"
+              className="text-sm text-sky-600 underline hover:no-underline"
             >
-              Retry
+              Try again
             </button>
           </div>
         )}
@@ -269,53 +275,57 @@ function StepThemeSelection({
           <>
             {publishedTheme ? (
               <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold text-neutral-900">{publishedTheme.name}</p>
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold text-neutral-900">{publishedTheme.name}</p>
+                      <span className="text-[9px] font-bold bg-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                        Live now
+                      </span>
+                    </div>
                     <p className="text-xs text-neutral-500 mt-0.5">
-                      Currently published · Updated {new Date(publishedTheme.updatedAt).toLocaleDateString()}
+                      Last updated {new Date(publishedTheme.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                     </p>
                   </div>
                   <a
-                    href={`https://${typeof window !== "undefined" ? window.location.hostname.replace("admin.", "") : "your-store.myshopify.com"}/admin/themes/${publishedTheme.id}/editor`}
+                    href={`https://${shopDomain}/admin/themes/${publishedTheme.id}/editor`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="ml-auto text-xs text-zinc-500 hover:text-zinc-700 flex items-center gap-1"
+                    className="text-xs text-sky-600 hover:text-sky-800 flex items-center gap-1 shrink-0"
                   >
-                    Edit <ExternalLink className="w-3 h-3" />
+                    View in editor <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
               </div>
             ) : (
-              <InlineAlert variant="warning">No published theme found. Ensure your store has an active theme.</InlineAlert>
+              <InlineAlert variant="warning">
+                No live theme found. Go to Shopify admin and publish a theme before creating a test.
+              </InlineAlert>
             )}
 
-            <div className="mt-4">
-              <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2">
-                All themes ({themes.length})
+            <div className="flex items-center justify-between mt-4">
+              <p className="text-xs text-neutral-500">
+                {unpublishedCount > 0
+                  ? `${unpublishedCount} unpublished theme${unpublishedCount !== 1 ? "s" : ""} available for variants in the next step.`
+                  : "No unpublished themes found — you will need to duplicate a theme before the next step."}
               </p>
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {themes.map((t) => (
-                  <ThemeCard
-                    key={t.id}
-                    theme={t}
-                    selected={state.variants[0]?.themeId === t.id}
-                    onSelect={() => {}}
-                    disabled={!t.isPublished}
-                    badgeLabel={state.variants[0]?.themeId === t.id ? "Control" : undefined}
-                  />
-                ))}
-              </div>
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="text-xs text-neutral-400 hover:text-neutral-600 flex items-center gap-1 shrink-0 ml-3"
+              >
+                <RefreshCw className="w-3 h-3" /> Refresh
+              </button>
             </div>
 
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="mt-2 text-xs text-neutral-400 hover:text-neutral-600 flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" /> Refresh theme list
-            </button>
+            {unpublishedCount === 0 && !loadingThemes && (
+              <InlineAlert variant="info">
+                To run a theme test, you need at least one unpublished theme to use as a variant.
+                In Shopify admin, go to <strong>Online Store → Themes</strong> and click <strong>Duplicate</strong>
+                on your live theme. Then come back and refresh.
+              </InlineAlert>
+            )}
           </>
         )}
       </FormSection>
@@ -332,11 +342,13 @@ function StepVariantThemes({
   loadingThemes,
   state,
   onChange,
+  shopDomain,
 }: {
   themes: ShopifyThemeOption[];
   loadingThemes: boolean;
   state: WizardState;
   onChange: (p: Partial<WizardState>) => void;
+  shopDomain: string;
 }) {
   const treatmentVariants = state.variants.filter((v) => !v.isControl);
   const usedThemeIds = new Set(
@@ -416,12 +428,12 @@ function StepVariantThemes({
 
           {variant.themeId && (
             <a
-              href={`https://your-store.myshopify.com/admin/themes/${variant.themeId}/editor`}
+              href={`https://${shopDomain}/admin/themes/${variant.themeId}/editor`}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-2 text-xs text-zinc-500 hover:text-zinc-700 flex items-center gap-1"
+              className="mt-2 text-xs text-sky-600 hover:text-sky-800 flex items-center gap-1"
             >
-              Preview theme <ExternalLink className="w-3 h-3" />
+              Preview in theme editor <ExternalLink className="w-3 h-3" />
             </a>
           )}
         </FormSection>
@@ -452,20 +464,12 @@ function StepTraffic({ state, onChange }: { state: WizardState; onChange: (p: Pa
         percentage (e.g. 20–40%) until you confirm the variant theme behaves correctly in production.
       </InlineAlert>
 
-      <FormSection title="Overall traffic" description="Percentage of visitors enrolled in the test." accent={ACCENT}>
-        <FormField label="Traffic allocation (%)" hint="Visitors outside this percentage see the live theme unchanged.">
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={state.trafficAllocation}
-            onChange={(e) =>
-              onChange({ trafficAllocation: Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 1)) })
-            }
-            className="w-28 text-sm border border-neutral-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-400"
-          />
-        </FormField>
-      </FormSection>
+      <TrafficSlider
+        value={state.trafficAllocation}
+        onChange={(v) => onChange({ trafficAllocation: v })}
+        accentColor={ACCENT}
+        holdoutLabel="See live theme unchanged"
+      />
 
       <FormSection title="Variant split" description="Distribute traffic between variants. Must total 100%." accent={ACCENT}>
         <VariantAllocationEditor
@@ -540,18 +544,12 @@ function StepRiskReview({ state, onChange }: { state: WizardState; onChange: (p:
         ))}
       </div>
 
-      <label className="flex items-start gap-3 cursor-pointer group">
-        <input
-          type="checkbox"
-          checked={state.riskConfirmed}
-          onChange={(e) => onChange({ riskConfirmed: e.target.checked })}
-          className="mt-0.5 w-4 h-4 rounded accent-sky-500 cursor-pointer"
-        />
-        <span className="text-sm text-neutral-700 leading-relaxed group-hover:text-neutral-900 transition-colors">
-          I understand the risks above and confirm that the variant theme has been tested in a preview
-          environment before activating this experiment.
-        </span>
-      </label>
+      <WizardCheckCard
+        checked={state.riskConfirmed}
+        onChange={(checked) => onChange({ riskConfirmed: checked })}
+        label="I understand the risks above and confirm that the variant theme has been tested in a preview environment before activating this experiment."
+        accentColor={ACCENT}
+      />
 
       {!state.riskConfirmed && (
         <InlineAlert variant="info">
@@ -837,7 +835,7 @@ function ThemePreviewPanel({
 // Wizard shell
 // ---------------------------------------------------------------------------
 
-export function ThemeTestWizard() {
+export function ThemeTestWizard({ shopDomain }: { shopDomain: string }) {
   const router = useRouter();
   const { success: showSuccess } = useToast();
   const [step, setStep] = useState(0);
@@ -1002,6 +1000,7 @@ export function ThemeTestWizard() {
                   state={state}
                   onChange={patch}
                   onRefresh={fetchThemes}
+                  shopDomain={shopDomain}
                 />
               )}
               {step === 2 && (
@@ -1010,6 +1009,7 @@ export function ThemeTestWizard() {
                   loadingThemes={loadingThemes}
                   state={state}
                   onChange={patch}
+                  shopDomain={shopDomain}
                 />
               )}
               {step === 3 && <StepTraffic state={state} onChange={patch} />}

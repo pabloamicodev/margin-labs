@@ -21,7 +21,10 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { Prisma, PersonalizationStatus } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+
+// Local string-union type — mirrors Prisma enum, avoids @prisma/client dependency before generate
+type PersonalizationStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "SCHEDULED" | "ARCHIVED";
 
 // ── Input types ───────────────────────────────────────────────────────────────
 
@@ -152,10 +155,10 @@ export class AbandonedCartService {
   async list(shopId: string, opts?: { status?: PersonalizationStatus; page?: number }) {
     const PAGE_SIZE = 50;
     const page = Math.max(1, opts?.page ?? 1);
-    const where: Prisma.PersonalizationWhereInput = {
+    const where = {
       shopId,
-      type: "ABANDONED_CART",
-      ...(opts?.status ? { status: opts.status } : { status: { not: "ARCHIVED" } }),
+      type: "ABANDONED_CART" as const,
+      ...(opts?.status ? { status: opts.status } : { status: { not: "ARCHIVED" as const } }),
     };
 
     const [items, total] = await prisma.$transaction([

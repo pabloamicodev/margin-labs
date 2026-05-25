@@ -314,6 +314,23 @@ export class ExperimentService {
     return updated;
   }
 
+  async hardDelete(shopId: string, id: string, actorId?: string) {
+    const experiment = await this.get(shopId, id);
+
+    await prisma.experiment.delete({ where: { id } });
+
+    await this.auditLog.log({
+      shopId,
+      actorId,
+      entityType: "experiment",
+      entityId: id,
+      entityName: experiment.name,
+      action: "deleted",
+    });
+
+    await this.invalidateCache(shopId);
+  }
+
   async duplicate(shopId: string, id: string, actorId?: string) {
     const source = await prisma.experiment.findFirst({
       where: { id, shopId },
@@ -346,7 +363,7 @@ export class ExperimentService {
         contentConfig: source.contentConfig as never,
         splitUrlConfig: source.splitUrlConfig as never,
         variants: {
-          create: source.variants.map((v) => ({
+          create: source.variants.map((v: (typeof source.variants)[number]) => ({
             shopId,
             key: v.key,
             name: v.name,

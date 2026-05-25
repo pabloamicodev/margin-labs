@@ -17,7 +17,12 @@ import {
   Activity,
   Lightbulb,
 } from "lucide-react";
+import { Sparkline } from "@/components/analytics/Sparkline";
 
+
+export const dynamic = 'force-dynamic';
+
+type DashboardExperiment = NonNullable<Awaited<ReturnType<typeof getDashboardData>>>["shop"]["experiments"][number];
 async function getDashboardData(shopDomain: string) {
   const shop = await prisma.shop.findUnique({
     where: { shopDomain },
@@ -36,7 +41,9 @@ async function getDashboardData(shopDomain: string) {
 
   if (!shop) return null;
 
-  const [runningCount, draftCount, totalRevenue, totalAssignments] = await Promise.all([
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [runningCount, draftCount, totalRevenue, totalAssignments, rawRevenue7d, rawParticipants7d] = await Promise.all([
     prisma.experiment.count({ where: { shopId: shop.id, status: "RUNNING" } }),
     prisma.experiment.count({ where: { shopId: shop.id, status: "DRAFT" } }),
     prisma.orderAttribution.aggregate({
@@ -44,7 +51,29 @@ async function getDashboardData(shopDomain: string) {
       _sum: { netRevenue: true },
     }),
     prisma.experimentAssignment.count({ where: { shopId: shop.id } }),
+    prisma.orderAttribution.findMany({
+      where: { shopId: shop.id, attributedAt: { gte: sevenDaysAgo } },
+      select: { attributedAt: true, netRevenue: true },
+    }),
+    prisma.experimentAssignment.findMany({
+      where: { shopId: shop.id, firstSeenAt: { gte: sevenDaysAgo } },
+      select: { firstSeenAt: true },
+    }),
   ]);
+
+  // Build 7-day daily sparkline arrays
+  const days7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return d.toISOString().slice(0, 10);
+  });
+  const revenueSparkline = days7.map((day) =>
+    rawRevenue7d.filter((r) => r.attributedAt.toISOString().slice(0, 10) === day)
+      .reduce((s, r) => s + r.netRevenue, 0)
+  );
+  const participantsSparkline = days7.map((day) =>
+    rawParticipants7d.filter((p) => p.firstSeenAt.toISOString().slice(0, 10) === day).length
+  );
 
   return {
     shop,
@@ -53,6 +82,8 @@ async function getDashboardData(shopDomain: string) {
       draftCount,
       totalRevenue: totalRevenue._sum.netRevenue ?? 0,
       totalAssignments,
+      revenueSparkline,
+      participantsSparkline,
     },
   };
 }
@@ -77,8 +108,8 @@ export default async function DashboardPage() {
   }
 
   const { stats, shop } = data;
-  const activeTests = shop.experiments.filter((e) => e.status === "RUNNING");
-  const otherTests = shop.experiments.filter((e) => e.status !== "RUNNING");
+  const activeTests = shop.experiments.filter((e: DashboardExperiment) => e.status === "RUNNING");
+  const otherTests = shop.experiments.filter((e: DashboardExperiment) => e.status !== "RUNNING");
 
   return (
     <div className="flex-1 overflow-auto" style={{ background: "#F8FAFC" }}>
@@ -122,7 +153,9 @@ export default async function DashboardPage() {
             icon={<DollarSign className="w-4 h-4" />}
             iconColor="#10b981"
             iconBg="rgba(16,185,129,0.1)"
-            subtext="All time"
+            subtext="7-day trend"
+            sparkline={stats.revenueSparkline}
+            sparklineColor="#10b981"
           />
           <MetricCard
             label="Participants"
@@ -133,11 +166,13 @@ export default async function DashboardPage() {
             icon={<Users className="w-4 h-4" />}
             iconColor="#0ea5e9"
             iconBg="rgba(14,165,233,0.1)"
-            subtext="Total assigned"
+            subtext="7-day trend"
+            sparkline={stats.participantsSparkline}
+            sparklineColor="#0ea5e9"
           />
           <MetricCard
             label="Tests Completed"
-            value={shop.experiments.filter((e) => e.status === "COMPLETED").length.toString()}
+            value={shop.experiments.filter((e: DashboardExperiment) => e.status === "COMPLETED").length.toString()}
             icon={<TrendingUp className="w-4 h-4" />}
             iconColor="#f59e0b"
             iconBg="rgba(245,158,11,0.1)"
@@ -192,7 +227,7 @@ export default async function DashboardPage() {
               </div>
             ) : (
               <div className="divide-y divide-neutral-50">
-                {activeTests.map((exp) => {
+                {(activeTests as DashboardExperiment[]).map((exp) => {
                   const typeTheme = getTestTypeTheme(exp.type);
                   return (
                     <Link
@@ -221,7 +256,7 @@ export default async function DashboardPage() {
                   );
                 })}
 
-                {otherTests.slice(0, 3).map((exp) => {
+                {(otherTests.slice(0, 3) as DashboardExperiment[]).map((exp) => {
                   const statusTheme = getStatusTheme(exp.status);
                   return (
                     <Link
@@ -256,7 +291,7 @@ export default async function DashboardPage() {
         {/* Get inspired callout */}
         <Link href="/get-inspired">
           <div
-            className="flex items-center justify-between px-5 py-4 rounded-xl cursor-pointer transition-all duration-150 hover:opacity-95"
+            className="flex items-center justify-between px-5 py-4 rounded-xl cursor-pointer transition-all duration-150 hover:opacity-95 mt-8"
             style={{
               background: "linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)",
               border: "1px solid #2d2d6b",
@@ -292,6 +327,8 @@ function MetricCard({
   iconColor,
   iconBg,
   subtext,
+  sparkline,
+  sparklineColor,
 }: {
   label: string;
   value: string;
@@ -299,20 +336,31 @@ function MetricCard({
   iconColor: string;
   iconBg: string;
   subtext: string;
+  sparkline?: number[];
+  sparklineColor?: string;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-neutral-200 shadow-card p-4">
-      <div className="flex items-start justify-between mb-3">
+    <div className="bg-white rounded-xl border border-neutral-200 shadow-card p-4 overflow-hidden">
+      <div className="flex items-start justify-between mb-2">
         <p className="text-xs font-medium text-neutral-500">{label}</p>
         <div
-          className="w-7 h-7 rounded-lg flex items-center justify-center"
+          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
           style={{ background: iconBg, color: iconColor }}
         >
           {icon}
         </div>
       </div>
       <p className="text-2xl font-bold text-neutral-900 tracking-tight">{value}</p>
-      <p className="text-xs text-neutral-400 mt-1">{subtext}</p>
+      {sparkline && sparkline.length > 0 ? (
+        <div className="-mx-4 mt-2">
+          <Sparkline values={sparkline} color={sparklineColor ?? iconColor} height={36} />
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-400 mt-1">{subtext}</p>
+      )}
+      {sparkline && sparkline.length > 0 && (
+        <p className="text-xs text-neutral-400 mt-1">{subtext}</p>
+      )}
     </div>
   );
 }

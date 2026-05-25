@@ -1,12 +1,15 @@
 import { Button } from "@/components/ui/Button";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
-import { Plus, FlaskConical, ArrowRight } from "lucide-react";
+import { Plus, FlaskConical } from "lucide-react";
 import { getSessionShop } from "@/lib/session-shop";
 import { CreateTestModal } from "@/components/experiments/CreateTestModal";
 import { getStatusTheme } from "@/lib/design/statusTheme";
 import { getTestTypeTheme } from "@/lib/design/testTypeTheme";
+import { ExperimentActionsMenu } from "@/components/experiments/ExperimentActionsMenu";
 
+
+export const dynamic = 'force-dynamic';
 const TYPE_LABELS: Record<string, string> = {
   PRICE_TEST: "Pricing+",
   DISCOUNT_TEST: "Discount",
@@ -68,6 +71,7 @@ export default async function ExperimentsPage({
   const shopDomain = await getSessionShop();
   const { status } = await searchParams;
   const { experiments, total } = await getExperiments(shopDomain, status);
+  type ExperimentRow = (typeof experiments)[number];
 
   const statusFilters = [
     { label: "All", value: "all" },
@@ -146,7 +150,7 @@ export default async function ExperimentsPage({
                 </tr>
               </thead>
               <tbody>
-                {experiments.map((exp) => {
+                {experiments.map((exp: ExperimentRow) => {
                   const statusTheme = getStatusTheme(exp.status);
                   const typeTheme = getTestTypeTheme(exp.type);
                   return (
@@ -194,11 +198,9 @@ export default async function ExperimentsPage({
                         </span>
                       </td>
                       <td className="px-4 py-3.5 text-right">
-                        <Link href={`/experiments/${exp.id}`}>
-                          <button className="p-1 text-neutral-300 hover:text-neutral-600 rounded transition-colors opacity-0 group-hover:opacity-100">
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </button>
-                        </Link>
+                        <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          <ExperimentActionsMenu experimentId={exp.id} status={exp.status} />
+                        </div>
                       </td>
                     </tr>
                   );
