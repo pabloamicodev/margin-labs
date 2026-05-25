@@ -1,0 +1,149 @@
+import "@shopify/ui-extensions/preact";
+import { render } from "preact";
+import { useState, useEffect, useCallback } from "preact/hooks";
+
+const BLOCK_HANDLE = "redo-offer";
+const APP_HANDLE = "checkout-redo-engine";
+
+// Fallback values used when the merchant has not configured the settings yet
+const FALLBACK_VARIANT_ID = "gid://shopify/ProductVariant/45066643996809";
+const FALLBACK_PRICE = "2.98";
+const FALLBACK_HEADING = "Redo Order Protection";
+const FALLBACK_SUBTITLE = "Protect your order against loss, theft, or damage";
+const FALLBACK_BENEFIT_1 = "Free returns & exchanges";
+const FALLBACK_BENEFIT_2 = "Worry-free returns";
+const FALLBACK_BUTTON_LABEL = "Add Protection";
+
+export default function () {
+  render(<Extension />, document.body);
+}
+
+function Extension() {
+  const { applyCartLinesChange, applyAttributeChange, lines, analytics, checkoutToken, settings } = shopify;
+
+  // Read settings configured by the merchant in the checkout editor.
+  // Falls back to default values if not set.
+  const REDO_VARIANT_ID = String(settings.current?.redo_variant_id ?? FALLBACK_VARIANT_ID);
+  const REDO_PRICE = String(settings.current?.redo_price ?? FALLBACK_PRICE);
+  const HEADING = String(settings.current?.block_heading ?? FALLBACK_HEADING);
+  const SUBTITLE = String(settings.current?.block_subtitle ?? FALLBACK_SUBTITLE);
+  const BENEFIT_1 = String(settings.current?.benefit_1 ?? FALLBACK_BENEFIT_1);
+  const BENEFIT_2 = String(settings.current?.benefit_2 ?? FALLBACK_BENEFIT_2);
+  const BUTTON_LABEL = String(settings.current?.button_label ?? FALLBACK_BUTTON_LABEL);
+
+  const [redoInCart, setRedoInCart] = useState(false);
+  const [redoLineId, setRedoLineId] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // Subscribe to cart lines changes
+  useEffect(() => {
+    function checkRedo() {
+      const currentLines = lines.current;
+      const redoLine = currentLines.find(
+        (line) => line.merchandise?.id === REDO_VARIANT_ID
+      );
+      setRedoInCart(!!redoLine);
+      setRedoLineId(redoLine ? redoLine.id : "");
+    }
+
+    checkRedo();
+    const unsubscribe = lines.subscribe(checkRedo);
+    return () => unsubscribe();
+  }, []);
+
+  // Layer 1: when Redo is added to the cart, write an order attribute.
+  // This attribute persists on the order and is visible in Shopify Admin and via the Admin API.
+  useEffect(() => {
+    if (!redoInCart) return;
+
+    const token = checkoutToken?.value ?? checkoutToken ?? "unknown";
+    const timestamp = new Date().toISOString();
+
+    applyAttributeChange({
+      type: "updateAttribute",
+      key: "_redo_added_via",
+      value: `block:${BLOCK_HANDLE}|app:${APP_HANDLE}|ts:${timestamp}`,
+    }).catch((err) => console.error("[redo-tracking] attribute error:", err));
+  }, [redoInCart]);
+
+  const handleToggle = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (redoInCart && redoLineId) {
+        await applyCartLinesChange({
+          type: "removeCartLine",
+          id: redoLineId,
+          quantity: 1,
+        });
+      } else {
+        // Layer 2: fire an analytics event at the exact moment of the click.
+        // Propagated to all Web Pixels (GA4, Segment, etc.)
+        const token = checkoutToken?.value ?? checkoutToken ?? "unknown";
+        analytics
+          .publish("redo_protection_added", {
+            extensionBlock: BLOCK_HANDLE,
+            app: APP_HANDLE,
+            variantId: REDO_VARIANT_ID,
+            checkoutToken: token,
+            timestamp: new Date().toISOString(),
+          })
+          .catch((err) => console.error("[redo-tracking] analytics error:", err));
+
+        await applyCartLinesChange({
+          type: "addCartLine",
+          merchandiseId: REDO_VARIANT_ID,
+          quantity: 1,
+        });
+      }
+    } catch (error) {
+      console.error("Redo cart change error:", error);
+    }
+    setLoading(false);
+  }, [redoInCart, redoLineId]);
+
+  // Hide the block if Redo is already in the cart
+  if (redoInCart) {
+    return null;
+  }
+
+  return (
+    <s-box
+      border="base"
+      borderRadius="base"
+      padding="base"
+      background="base"
+    >
+      <s-stack direction="block" gap="base">
+        <s-stack direction="inline" gap="small" alignItems="center">
+          <s-icon type="check-circle" tone="success" size="large" />
+          <s-stack direction="block" gap="small-100">
+            <s-heading>{HEADING}</s-heading>
+            <s-text color="subdued" type="small">
+              {SUBTITLE}
+            </s-text>
+          </s-stack>
+        </s-stack>
+
+        <s-divider />
+
+        <s-stack direction="inline" justifyContent="space-between" alignItems="center">
+          <s-stack direction="block" gap="small-100">
+            <s-text>✓ {BENEFIT_1}</s-text>
+            <s-text>✓ {BENEFIT_2}</s-text>
+          </s-stack>
+
+          <s-stack direction="block" gap="small-100" alignItems="end">
+            <s-text type="strong">${REDO_PRICE}</s-text>
+            <s-button
+              variant="primary"
+              disabled={loading}
+              onClick={handleToggle}
+            >
+              {loading ? "..." : redoInCart ? "✓ Added" : BUTTON_LABEL}
+            </s-button>
+          </s-stack>
+        </s-stack>
+      </s-stack>
+    </s-box>
+  );
+}

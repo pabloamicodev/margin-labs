@@ -1,0 +1,14 @@
+{
+  "checkbox": {
+    "text_before": "Uno o más artículos en tu carrito es una compra diferida, suscripción o recurrente. Al continuar con tu pago, aceptas que tu método de pago será cargado automáticamente al precio y frecuencia indicados en esta página hasta que finalice o canceles. Todas las cancelaciones están sujetas a la",
+    "link_text": "política de términos y condiciones",
+    "text_after": ""
+  },
+  "errors": {
+    "must_accept": "Debes aceptar los Términos y Condiciones para continuar."
+  },
+  "proceed": {
+    "button_label": "Continuar al siguiente paso",
+    "hint": "Acepta los Términos y Condiciones de arriba para desbloquear este paso."
+  }
+}
