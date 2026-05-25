@@ -6,6 +6,8 @@ import { Plus, ExternalLink } from "lucide-react";
 import { getSessionShop } from "@/lib/session-shop";
 import { getStatusTheme } from "@/lib/design/statusTheme";
 
+
+export const dynamic = 'force-dynamic';
 const service = new CheckoutBlockService();
 
 const TYPE_LABELS: Record<string, string> = {
@@ -39,6 +41,7 @@ export default async function CheckoutBlocksPage() {
   const { items, total } = shop
     ? await service.list(shop.id, { limit: 100 })
     : { items: [], total: 0 };
+  type CheckoutBlockRow = (typeof items)[number];
 
   return (
     <div className="flex-1 overflow-auto bg-neutral-50">
@@ -79,7 +82,7 @@ export default async function CheckoutBlocksPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-50">
-                {items.map((block) => {
+                {items.map((block: CheckoutBlockRow) => {
                   const st = getStatusTheme(block.status);
                   return (
                     <tr key={block.id} className="hover:bg-neutral-50/60 transition-colors group">

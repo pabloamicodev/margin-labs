@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { ExperimentTypeList } from "@/components/experiments/ExperimentTypeList";
 import { getSessionShop } from "@/lib/session-shop";
 
+
+export const dynamic = 'force-dynamic';
 export const metadata = { title: "Split URL Tests — MarginLab" };
 
 export default async function SplitUrlTestsPage() {
@@ -22,7 +24,10 @@ export default async function SplitUrlTestsPage() {
     prisma.experiment.count({ where: { shopId: shop.id, type: "SPLIT_URL_TEST" } }),
   ]);
 
-  const initialItems = items.map((e) => ({
+  type ExperimentItem = (typeof items)[number];
+
+
+  const initialItems = items.map((e: ExperimentItem) => ({
     id: e.id,
     name: e.name,
     status: e.status,
@@ -49,3 +54,4 @@ export default async function SplitUrlTestsPage() {
     </div>
   );
 }
+

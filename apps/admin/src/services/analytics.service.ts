@@ -6,7 +6,6 @@
  * by implementing the same interface with ClickHouse queries.
  */
 
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { twoProportionZTest, welchTTest, minimumSampleSize } from "@/lib/statistics";
 import { cacheGet, cacheSet, CACHE_TTL } from "@/lib/redis";
@@ -308,8 +307,8 @@ export class AnalyticsService {
       orderBy: { date: "asc" },
     });
 
-    const variantMap = new Map(
-      experiment.variants.map((v) => [v.id, { key: v.key, name: v.name, isControl: v.isControl }])
+    const variantMap = new Map<string, { key: string; name: string; isControl: boolean }>(
+      experiment.variants.map((v: (typeof experiment.variants)[number]) => [v.id, { key: v.key, name: v.name, isControl: v.isControl }])
     );
 
     const byDate = new Map<string, Record<string, number>>();
@@ -351,29 +350,27 @@ export class AnalyticsService {
     const startDate = dateRange?.start ?? experiment.launchedAt ?? experiment.createdAt;
     const endDate = dateRange?.end ?? new Date();
 
-    const rows = await prisma.$queryRaw<
-      Array<{ variantId: string; dimensionValue: string; visitors: bigint }>
-    >(Prisma.sql`
+    const rows = (await prisma.$queryRawUnsafe(`
       SELECT
         "variantId",
-        ${Prisma.raw(`"${col}"`)} AS "dimensionValue",
+        "${col}" AS "dimensionValue",
         COUNT(DISTINCT "visitorId") AS visitors
       FROM "Event"
-      WHERE "shopId" = ${shopId}
-        AND "experimentId" = ${experimentId}
-        AND ${Prisma.raw(`"${col}"`)} IS NOT NULL
-        AND "occurredAt" >= ${startDate}
-        AND "occurredAt" <= ${endDate}
-      GROUP BY "variantId", ${Prisma.raw(`"${col}"`)}
+      WHERE "shopId" = $1
+        AND "experimentId" = $2
+        AND "${col}" IS NOT NULL
+        AND "occurredAt" >= $3
+        AND "occurredAt" <= $4
+      GROUP BY "variantId", "${col}"
       ORDER BY visitors DESC
       LIMIT 100
-    `);
+    `, shopId, experimentId, startDate, endDate)) as Array<{ variantId: string; dimensionValue: string; visitors: bigint }>;
 
-    const variantMap = new Map(
-      experiment.variants.map((v) => [v.id, { key: v.key, name: v.name }])
+    const variantMap = new Map<string, { key: string; name: string }>(
+      experiment.variants.map((v: (typeof experiment.variants)[number]) => [v.id, { key: v.key, name: v.name }])
     );
 
-    return rows.map((r) => ({
+    return rows.map((r: (typeof rows)[number]) => ({
       dimensionValue: r.dimensionValue,
       variantId: r.variantId,
       variantKey: variantMap.get(r.variantId)?.key ?? r.variantId,
@@ -428,7 +425,7 @@ export class AnalyticsService {
       _count: { visitorId: true },
     });
     const visitorMap = new Map(
-      visitorCounts.map((r) => [r.variantId, r._count.visitorId])
+      visitorCounts.map((r: (typeof visitorCounts)[number]) => [r.variantId, r._count.visitorId])
     );
 
     // Custom event occurrences per variant
@@ -443,11 +440,11 @@ export class AnalyticsService {
       _count: { id: true },
     });
     const eventCountMap = new Map(
-      eventCounts.map((r) => [r.variantId ?? "", r._count.id])
+      eventCounts.map((r: (typeof eventCounts)[number]) => [r.variantId ?? "", r._count.id])
     );
 
     // Unique visitors who triggered the event per variant
-    const uniqueRows = await prisma.$queryRaw<Array<{ variantId: string; uniqueVisitors: bigint }>>`
+    const uniqueRows = (await prisma.$queryRaw`
       SELECT "variantId", COUNT(DISTINCT "visitorId") AS "uniqueVisitors"
       FROM "Event"
       WHERE "shopId" = ${shopId}
@@ -456,13 +453,13 @@ export class AnalyticsService {
         AND "occurredAt" >= ${startDate}
         AND "occurredAt" <= ${endDate}
       GROUP BY "variantId"
-    `;
+    `) as Array<{ variantId: string; uniqueVisitors: bigint }>;
     const uniqueMap = new Map(
       uniqueRows.map((r) => [r.variantId, Number(r.uniqueVisitors)])
     );
 
-    const variantStats = experiment.variants.map((v) => {
-      const totalVisitors = visitorMap.get(v.id) ?? 0;
+    const variantStats = experiment.variants.map((v: (typeof experiment.variants)[number]) => {
+      const totalVisitors = Number(visitorMap.get(v.id) ?? 0);
       const eventCount = eventCountMap.get(v.id) ?? 0;
       const uniqueVisitors = uniqueMap.get(v.id) ?? 0;
       const conversionRate = totalVisitors > 0 ? uniqueVisitors / totalVisitors : 0;
@@ -470,8 +467,8 @@ export class AnalyticsService {
     });
 
     // Compute z-test vs control for each non-control variant
-    const control = variantStats.find((v) => v.isControl);
-    const results = variantStats.map((v) => {
+    const control = variantStats.find((v: (typeof variantStats)[number]) => v.isControl);
+    const results = variantStats.map((v: (typeof variantStats)[number]) => {
       if (v.isControl || !control) return { ...v };
       const test = twoProportionZTest(
         { visitors: control.totalVisitors, conversions: control.uniqueVisitors, totalRevenue: 0, totalProfit: 0 },

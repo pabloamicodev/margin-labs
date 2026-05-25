@@ -143,11 +143,11 @@ export class ThemeTestService {
         const { themes } = await restFetch<{ themes: ShopifyTheme[] }>("/themes.json");
 
         const publishedTheme = themes.find((t) => t.role === "main");
-        const themeMap = new Map(themes.map((t) => [t.id, t]));
+        const themeMap = new Map(themes.map((t: (typeof themes)[number]) => [t.id, t]));
 
         // Guard 3: control theme must match the currently published theme
         // (We check if the control variant has a themeId set that differs from the live theme)
-        const controlVariant = exp.variants.find((v) => v.isControl);
+        const controlVariant = exp.variants.find((v: typeof exp.variants[number]) => v.isControl);
         const controlSettings = controlVariant?.settings as Record<string, unknown> | null;
         const controlThemeId = controlSettings?.themeId as number | undefined;
 
@@ -216,9 +216,11 @@ export class ThemeTestService {
 
     if (running.length === 0) return { paused: 0, ids: [] };
 
+    type RunningExp = (typeof running)[number];
+
     // Pause each one and append a warning note to its settings
     await Promise.all(
-      running.map(async (exp) => {
+      running.map(async (exp: RunningExp) => {
         await prisma.experiment.update({
           where: { id: exp.id },
           data: {
@@ -236,6 +238,6 @@ export class ThemeTestService {
       `[ThemeTestService] Auto-paused ${running.length} running theme test(s) for shop ${shopId} — reason: ${reason}`
     );
 
-    return { paused: running.length, ids: running.map((e) => e.id) };
+    return { paused: running.length, ids: running.map((e: (typeof running)[number]) => e.id) };
   }
 }

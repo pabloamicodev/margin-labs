@@ -5,6 +5,8 @@ import { OfferService } from "@/services/offer.service";
 import { prisma } from "@/lib/prisma";
 import { getSessionShop } from "@/lib/session-shop";
 
+
+export const dynamic = 'force-dynamic';
 const offerService = new OfferService();
 
 export const metadata = { title: "New Post-Purchase Personalization — MarginLab" };
@@ -20,9 +22,11 @@ export default async function NewPostPurchasePage() {
     ? await offerService.list(shop.id, { limit: 200 })
     : { items: [] };
 
+  type AvailableOffer = (typeof availableOffers)[number];
   const eligibleOffers = availableOffers.filter(
-    (o) => o.status === "ACTIVE" || o.status === "DRAFT"
+    (o: AvailableOffer) => o.status === "ACTIVE" || o.status === "DRAFT"
   );
+  type EligibleOffer = (typeof eligibleOffers)[number];
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -35,7 +39,7 @@ export default async function NewPostPurchasePage() {
         </Link>
       </div>
       <PostPurchaseWizard
-        availableOffers={eligibleOffers.map((o) => ({
+        availableOffers={eligibleOffers.map((o: EligibleOffer) => ({
           id: o.id,
           name: o.name,
           type: o.type,

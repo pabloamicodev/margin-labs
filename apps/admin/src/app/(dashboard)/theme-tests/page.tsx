@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { ExperimentTypeList } from "@/components/experiments/ExperimentTypeList";
 import { getSessionShop } from "@/lib/session-shop";
 
+
+export const dynamic = 'force-dynamic';
 export const metadata = { title: "Theme Tests — MarginLab" };
 
 export default async function ThemeTestsPage() {
@@ -29,7 +31,10 @@ export default async function ThemeTestsPage() {
     prisma.experiment.count({ where: { shopId: shop.id, type: "THEME_TEST" } }),
   ]);
 
-  const initialItems = items.map((e) => ({
+  type ExperimentItem = (typeof items)[number];
+
+
+  const initialItems = items.map((e: ExperimentItem) => ({
     id: e.id,
     name: e.name,
     status: e.status,
@@ -56,3 +61,4 @@ export default async function ThemeTestsPage() {
     </div>
   );
 }
+

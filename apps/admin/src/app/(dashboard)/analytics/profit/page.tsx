@@ -2,14 +2,21 @@ import Link from "next/link";
 import { Card, CardHeader, CardTitle, MetricCard } from "@/components/ui/Card";
 import { getStatusTheme } from "@/lib/design/statusTheme";
 import { prisma } from "@/lib/prisma";
-import { AnalyticsService } from "@/services/analytics.service";
+import { AnalyticsService, type ExperimentAnalytics, type VariantMetrics } from "@/services/analytics.service";
 import { CogsService } from "@/services/cogs.service";
 import { formatCurrency, formatPercent, formatRelativeLift } from "@/lib/utils";
 import { TrendingUp, DollarSign, BarChart3, AlertTriangle, ExternalLink, Download } from "lucide-react";
 import { getSessionShop } from "@/lib/session-shop";
 
+
+export const dynamic = 'force-dynamic';
 const analyticsService = new AnalyticsService();
 const cogsService = new CogsService();
+
+type ExperimentMetricItem = {
+  experiment: { id: string; name: string; type: string; status: string; launchedAt: Date | null };
+  analytics: ExperimentAnalytics | null;
+};
 
 async function getData(shopDomain: string) {
   const shop = await prisma.shop.findUnique({
@@ -45,9 +52,11 @@ async function getData(shopDomain: string) {
     cogsService.getCoverage(shop.id),
   ]);
 
+  type ExperimentRow = (typeof experiments)[number];
+
   // Fetch analytics per experiment in parallel (max 10 at a time)
-  const experimentMetrics = await Promise.all(
-    experiments.map(async (exp) => {
+  const experimentMetrics: ExperimentMetricItem[] = await Promise.all(
+    experiments.map(async (exp: ExperimentRow) => {
       const analytics = await analyticsService.getExperimentAnalytics(shop.id, exp.id);
       return { experiment: exp, analytics };
     })
@@ -163,10 +172,10 @@ export default async function ProfitAnalyticsPage() {
             <p className="text-sm text-neutral-500">No launched experiments yet</p>
           </Card>
         ) : (
-          experimentMetrics.map(({ experiment, analytics }) => {
+          experimentMetrics.map(({ experiment, analytics }: ExperimentMetricItem) => {
             if (!analytics || analytics.variants.length === 0) return null;
 
-            const control = analytics.variants.find((v) => v.isControl);
+            const control = analytics.variants.find((v: VariantMetrics) => v.isControl);
             const variants = analytics.variants;
 
             return (
@@ -214,7 +223,7 @@ export default async function ProfitAnalyticsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-100">
-                      {variants.map((v) => {
+                      {variants.map((v: VariantMetrics) => {
                         const margin =
                           v.netRevenue > 0 ? v.grossProfit / v.netRevenue : 0;
                         const ppvLift =

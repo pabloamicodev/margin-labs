@@ -3,6 +3,8 @@ import { ExperimentTypeList } from "@/components/experiments/ExperimentTypeList"
 import { getSessionShop } from "@/lib/session-shop";
 import { prisma } from "@/lib/prisma";
 
+
+export const dynamic = 'force-dynamic';
 export const metadata = { title: "Template Tests — MarginLab" };
 
 const service = new TemplateTestService();
@@ -15,7 +17,8 @@ export default async function TemplateTestsPage() {
     ? await service.list(shop.id, { limit: 50 })
     : { items: [], total: 0 };
 
-  const rows = items.map((e) => ({
+  type TemplateItem = (typeof items)[number];
+  const rows = items.map((e: TemplateItem) => ({
     id: e.id,
     name: e.name,
     status: e.status,

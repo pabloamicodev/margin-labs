@@ -3,6 +3,8 @@ import { OfferService } from "@/services/offer.service";
 import { prisma } from "@/lib/prisma";
 import { getSessionShop } from "@/lib/session-shop";
 
+
+export const dynamic = 'force-dynamic';
 const offerService = new OfferService();
 const PAGE_SIZE = 50;
 
@@ -16,6 +18,7 @@ export default async function OffersLibraryPage() {
   const { items, total } = shop
     ? await offerService.list(shop.id, { page: 1, limit: PAGE_SIZE })
     : { items: [], total: 0 };
+  type OfferItem = (typeof items)[number];
 
   return (
     <div className="flex-1 overflow-auto bg-neutral-50">
@@ -25,7 +28,7 @@ export default async function OffersLibraryPage() {
           <p className="text-sm text-neutral-400 mt-0.5">Reusable discount and promotion rules for experiments and personalizations</p>
         </div>
         <OffersClient
-          initialItems={items.map((o) => ({
+          initialItems={items.map((o: OfferItem) => ({
             ...o,
             createdAt: o.createdAt.toISOString(),
             updatedAt: o.updatedAt.toISOString(),

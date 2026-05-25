@@ -4,6 +4,7 @@ import { ChevronLeft, Target, CalendarDays, ListFilter, Zap, AlertCircle, Clock 
 import { prisma } from "@/lib/prisma";
 import { getSessionShop } from "@/lib/session-shop";
 import { PersonalizationActions } from "@/components/personalizations/PersonalizationActions";
+import { PersonalizationEditPanel } from "@/components/personalizations/PersonalizationEditPanel";
 import { getStatusTheme } from "@/lib/design/statusTheme";
 
 export const metadata = { title: "Personalization — MarginLab" };
@@ -109,6 +110,19 @@ export default async function PersonalizationDetailPage({
       {/* Content */}
       <div className="max-w-4xl mx-auto px-6 py-6 space-y-5">
 
+        {/* Edit Panel */}
+        <PersonalizationEditPanel
+          personalizationId={personalization.id}
+          initial={{
+            name: personalization.name,
+            priority: personalization.priority,
+            startsAt: personalization.startsAt?.toISOString() ?? null,
+            endsAt: personalization.endsAt?.toISOString() ?? null,
+            targetingRules: rules as { type: string; operator?: string; value?: string }[],
+            offerIds: offerIds,
+          }}
+        />
+
         {/* Targeting Rules */}
         <div className="bg-white rounded-xl border border-neutral-100 overflow-hidden">
           <div className="flex items-center gap-2 px-5 py-3 border-b border-neutral-50">
@@ -168,7 +182,7 @@ export default async function PersonalizationDetailPage({
             </div>
             <div className="px-5 py-4">
               <div className="space-y-2">
-                {offerIds.map((offerId) => (
+                {offerIds.map((offerId: string) => (
                   <Link
                     key={offerId}
                     href={`/offers-library/${offerId}`}

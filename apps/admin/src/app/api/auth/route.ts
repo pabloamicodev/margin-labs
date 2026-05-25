@@ -32,9 +32,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid shop domain" }, { status: 400 });
   }
 
-  const apiKey = process.env.SHOPIFY_API_KEY;
-  const scopes = process.env.SHOPIFY_APP_SCOPES ?? "";
-  const host = process.env.HOST;
+  const apiKey = process.env.SHOPIFY_API_KEY?.trim();
+  const scopes = (process.env.SHOPIFY_APP_SCOPES ?? "").trim();
+  const host = process.env.HOST?.trim().replace(/[\r\n]+$/, "");
 
   if (!apiKey || !host) {
     return NextResponse.json(
@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
   }
 
   const state = randomBytes(16).toString("hex");
+  // Simple callback URL — no extra params. Shopify will append host, shop, code, etc. itself.
   const redirectUri = `${host}/api/auth/callback`;
 
   const authUrl =
@@ -58,8 +59,8 @@ export async function GET(request: NextRequest) {
   // CSRF state cookie — expires after 10 minutes
   response.cookies.set("shopify_oauth_state", state, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+    secure: true,
     maxAge: 600,
     path: "/",
   });

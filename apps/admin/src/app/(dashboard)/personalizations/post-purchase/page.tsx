@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { getSessionShop } from "@/lib/session-shop";
 import { PostPurchaseClient } from "@/components/personalizations/PostPurchaseClient";
-import { Prisma } from "@prisma/client";
 
+
+export const dynamic = 'force-dynamic';
 export const metadata = { title: "Post-Purchase Personalizations — MarginLab" };
 
 const PAGE_SIZE = 50;
@@ -30,8 +31,7 @@ export default async function PostPurchasePersonalizationsPage() {
 
   if (shop) {
     try {
-      items = await prisma.$queryRaw<Row[]>(
-        Prisma.sql`
+      items = (await prisma.$queryRaw`
           SELECT id, name, status, priority, "offerIds",
                  "startsAt", "endsAt", "createdAt", "updatedAt"
           FROM "Personalization"
@@ -40,8 +40,7 @@ export default async function PostPurchasePersonalizationsPage() {
             AND status != 'ARCHIVED'
           ORDER BY priority ASC, "updatedAt" DESC
           LIMIT ${PAGE_SIZE}
-        `
-      );
+        `) as Row[];
     } catch {
       // POST_PURCHASE enum not yet in DB — show empty state until migration runs
       items = [];
