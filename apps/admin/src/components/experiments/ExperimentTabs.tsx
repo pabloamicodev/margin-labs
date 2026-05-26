@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 import {
   Eye, BarChart3, Check, ChevronDown, RefreshCw,
@@ -387,6 +388,201 @@ function ResultsTab({
 
       {/* By Audience */}
       <AudienceTable experiment={experiment} analytics={analytics} currencyCode={currencyCode} />
+
+      {/* Custom Metrics */}
+      <CustomMetricsCard experimentId={experiment.id} variants={experiment.variants} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// CUSTOM METRICS CARD
+// ─────────────────────────────────────────────
+
+interface CustomEventOption {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+}
+
+interface CustomMetricResult {
+  eventName: string;
+  eventDisplayName: string;
+  variants: Array<{
+    variantId: string;
+    variantKey: string;
+    variantName: string;
+    isControl: boolean;
+    totalVisitors: number;
+    eventCount: number;
+    uniqueVisitors: number;
+    conversionRate: number;
+    test?: {
+      pValue: number;
+      isSignificant: boolean;
+      recommendation: string;
+      relativeUplift: number;
+    };
+  }>;
+}
+
+function CustomMetricsCard({ experimentId, variants }: { experimentId: string; variants: { id: string; name: string; key: string; isControl: boolean }[] }) {
+  const [events, setEvents] = React.useState<CustomEventOption[]>([]);
+  const [selectedEvent, setSelectedEvent] = React.useState<string>("");
+  const [result, setResult] = React.useState<CustomMetricResult | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [eventsLoading, setEventsLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    fetch("/api/custom-events")
+      .then((r) => r.json())
+      .then((d: { events: CustomEventOption[] }) => {
+        setEvents(d.events ?? []);
+        if (d.events?.length > 0) setSelectedEvent(d.events[0]!.name);
+      })
+      .catch(() => {})
+      .finally(() => setEventsLoading(false));
+  }, []);
+
+  const fetchMetrics = React.useCallback(async (eventName: string) => {
+    if (!eventName) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch(`/api/experiments/${experimentId}/analytics/custom-metrics?eventName=${encodeURIComponent(eventName)}`);
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: "Failed to load" })) as { error: string };
+        setError(d.error ?? "Failed to load custom metrics");
+        return;
+      }
+      const data = await res.json() as CustomMetricResult;
+      setResult(data);
+    } finally {
+      setLoading(false);
+    }
+  }, [experimentId]);
+
+  const handleSelect = (name: string) => {
+    setSelectedEvent(name);
+    fetchMetrics(name);
+  };
+
+  if (eventsLoading) return null;
+  if (events.length === 0) return null;
+
+  const controlVariant = result?.variants.find((v) => v.isControl);
+
+  return (
+    <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+      <div className="px-5 py-4 border-b border-neutral-100 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-neutral-900 flex items-center gap-2">
+            <Activity className="w-4 h-4 text-brand-500" />
+            Custom Metrics
+          </h3>
+          <p className="text-xs text-neutral-400 mt-0.5">Per-variant breakdown for your registered custom events</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedEvent}
+            onChange={(e) => handleSelect(e.target.value)}
+            className="text-xs border border-neutral-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+          >
+            {events.map((e) => (
+              <option key={e.id} value={e.name}>{e.displayName}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => fetchMetrics(selectedEvent)}
+            disabled={loading || !selectedEvent}
+            className="p-1.5 text-neutral-400 hover:text-neutral-600 border border-neutral-200 rounded-lg bg-white disabled:opacity-50"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+      </div>
+
+      <div className="px-5 py-4">
+        {!result && !loading && !error && (
+          <p className="text-xs text-neutral-400 text-center py-4">
+            Select an event and click refresh to see per-variant data.
+          </p>
+        )}
+        {loading && (
+          <p className="text-xs text-neutral-400 text-center py-4 animate-pulse">Loading…</p>
+        )}
+        {error && (
+          <p className="text-xs text-danger-600 text-center py-4">{error}</p>
+        )}
+        {result && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-neutral-100">
+                  <th className="text-left py-2 pr-4 font-medium text-neutral-500">Variant</th>
+                  <th className="text-right py-2 px-3 font-medium text-neutral-500">Visitors</th>
+                  <th className="text-right py-2 px-3 font-medium text-neutral-500">Event Count</th>
+                  <th className="text-right py-2 px-3 font-medium text-neutral-500">Unique Visitors</th>
+                  <th className="text-right py-2 px-3 font-medium text-neutral-500">Conv. Rate</th>
+                  <th className="text-right py-2 pl-3 font-medium text-neutral-500">vs. Control</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-50">
+                {result.variants.map((v) => {
+                  const uplift = v.test?.relativeUplift;
+                  const sig = v.test?.isSignificant;
+                  return (
+                    <tr key={v.variantId} className="hover:bg-neutral-50">
+                      <td className="py-2.5 pr-4">
+                        <span className="font-medium text-neutral-800">{v.variantName}</span>
+                        {v.isControl && (
+                          <span className="ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-500">Control</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-neutral-700 tabular-nums">{v.totalVisitors.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right text-neutral-700 tabular-nums">{v.eventCount.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right text-neutral-700 tabular-nums">{v.uniqueVisitors.toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right font-medium text-neutral-800 tabular-nums">
+                        {(v.conversionRate * 100).toFixed(2)}%
+                        {controlVariant && !v.isControl && controlVariant.conversionRate > 0 && (
+                          <span className="ml-1 text-[10px] text-neutral-400">
+                            ({controlVariant.conversionRate > 0
+                              ? ((v.conversionRate / controlVariant.conversionRate - 1) * 100 >= 0 ? "+" : "")
+                              + ((v.conversionRate / controlVariant.conversionRate - 1) * 100).toFixed(1) + "%"
+                              : "—"})
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pl-3 text-right">
+                        {v.isControl ? (
+                          <span className="text-neutral-300">—</span>
+                        ) : uplift !== undefined ? (
+                          <span className={`inline-flex items-center gap-0.5 font-semibold ${sig ? (uplift >= 0 ? "text-success-600" : "text-danger-600") : "text-neutral-500"}`}>
+                            {uplift >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                            {Math.abs(uplift * 100).toFixed(1)}%
+                            {sig ? <span className="text-[9px] ml-0.5">{v.test?.recommendation === "variant" ? "✓" : "✗"}</span> : null}
+                          </span>
+                        ) : (
+                          <span className="text-neutral-300">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {result.variants.some((v) => v.test?.isSignificant) && (
+              <p className="text-[10px] text-neutral-400 mt-3">
+                ✓ = statistically significant at 95% confidence. Uplift is relative to control.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2169,7 +2365,7 @@ function ContentModificationsTab({ experiment }: { experiment: ExperimentData })
   };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Inline guard: broken selectors */}
       {brokenCount > 0 && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -2309,7 +2505,7 @@ function SplitUrlRoutesTab({ experiment }: { experiment: ExperimentData }) {
   });
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Guard: duplicate URLs */}
       {duplicateEntries.length > 0 && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -2429,7 +2625,7 @@ function CheckoutBlockConfigTab({ experiment }: { experiment: ExperimentData }) 
   const isInactivePlacement = placement ? INACTIVE_PLACEMENTS.has(placement.toLowerCase()) : false;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Guard: extension not installed */}
       {extensionInstalled === false && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -2567,7 +2763,7 @@ function DiscountConfigTab({ experiment }: { experiment: ExperimentData }) {
   const stackingConflict = stacking === "ALLOW_ALL" || stacking === "allow_all";
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Guard: function not deployed */}
       {functionDeployed === false && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -2667,7 +2863,7 @@ function ShippingConfigTab({ experiment }: { experiment: ExperimentData }) {
   const functionDeployed = cfg?.functionDeployed as boolean | undefined;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Guard: delivery customization function not active */}
       {functionDeployed === false && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -2761,7 +2957,7 @@ function PriceMatrixTab({ experiment }: { experiment: ExperimentData }) {
 
   if (productList.length === 0) {
     return (
-      <div className="p-6 max-w-4xl mx-auto">
+      <div className="p-6  mx-auto">
         <div className="bg-white rounded-xl border border-neutral-200 py-16 text-center">
           <DollarSign className="w-8 h-8 mx-auto mb-3 text-neutral-300" />
           <p className="text-sm font-medium text-neutral-500 mb-1">No price overrides yet</p>
@@ -2907,7 +3103,7 @@ function OfferConfigTab({ experiment }: { experiment: ExperimentData }) {
   });
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Guard: archived offer while test active */}
       {archivedVariants.length > 0 && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -3047,7 +3243,7 @@ function PersonalizationConfigTab({ experiment }: { experiment: ExperimentData }
   const hasPriorityConflict = new Set(priorityValues).size < priorityValues.length;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Guard: archived offer */}
       {archivedOfferVariants.length > 0 && (
         <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
@@ -3162,7 +3358,7 @@ function PersonalizationConfigTab({ experiment }: { experiment: ExperimentData }
 function GenericConfigTab({ experiment }: { experiment: ExperimentData }) {
   const cfg = experiment.settings;
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6  mx-auto">
       <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-neutral-100 flex items-center gap-2">
           <Settings2 className="w-4 h-4 text-neutral-400" />
@@ -3202,7 +3398,7 @@ function TargetingTab({ experiment }: { experiment: ExperimentData }) {
   };
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       {/* Assignment + traffic */}
       <div className="bg-white rounded-xl border border-neutral-200 p-5">
         <div className="flex items-center gap-2 mb-4">
@@ -3292,7 +3488,7 @@ function TargetingTab({ experiment }: { experiment: ExperimentData }) {
 // ─────────────────────────────────────────────
 function PreviewTab({ experiment }: { experiment: ExperimentData }) {
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6  mx-auto">
       <div className="bg-white rounded-xl border border-neutral-200 py-24 text-center">
         <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 bg-neutral-100">
           <Eye className="w-6 h-6 text-neutral-400" />
@@ -3336,7 +3532,7 @@ const METRICS_CONFIG = [
 
 function AnalyticsConfigTab({ experiment }: { experiment: ExperimentData }) {
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6  mx-auto">
       <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-neutral-100">
           <h2 className="text-sm font-semibold text-neutral-900">Metrics to track</h2>
@@ -3377,7 +3573,7 @@ function QAHealthTab({ experiment }: { experiment: ExperimentData }) {
   const checks = buildQAChecks(experiment);
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-6  mx-auto space-y-4">
       <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-neutral-100 flex items-center gap-2">
           <Activity className="w-4 h-4 text-neutral-400" />

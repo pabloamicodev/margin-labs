@@ -37,6 +37,8 @@ export interface RuntimeExperiment {
   priceConfig: unknown | null;
   contentConfig: unknown | null;
   splitUrlConfig: unknown | null;
+  shippingConfig: unknown | null;
+  discountConfig: unknown | null;
 }
 
 export interface RuntimeOffer {
@@ -107,7 +109,11 @@ export class RuntimeConfigService {
 
     const fresh = await this.build(shopDomain);
     if (fresh) {
-      await cacheSet(cacheKey, fresh, CACHE_TTL.RUNTIME_CONFIG);
+      try {
+        await cacheSet(cacheKey, fresh, CACHE_TTL.RUNTIME_CONFIG);
+      } catch {
+        // Cache write failures should not block runtime config delivery.
+      }
     }
     return fresh;
   }
@@ -141,7 +147,7 @@ export class RuntimeConfigService {
 
     if (!shop) return null;
 
-    const shopSettings = shop.settings as Record<string, unknown>;
+    const shopSettings = (shop.settings ?? {}) as Record<string, unknown>;
 
     const config: RuntimeConfig = {
       shopDomain,
@@ -171,6 +177,8 @@ export class RuntimeConfigService {
         priceConfig: exp.priceConfig,
         contentConfig: exp.contentConfig,
         splitUrlConfig: exp.splitUrlConfig,
+        shippingConfig: exp.shippingConfig ?? null,
+        discountConfig: exp.discountConfig ?? null,
       })),
       offers: shop.offers.map((offer: (typeof shop.offers)[number]) => ({
         id: offer.id,

@@ -45,7 +45,7 @@ export default async function PostPurchaseDetailPage({
     : [];
 
   // Preserve the order from offerIds
-  const offersById = Object.fromEntries(offers.map((o) => [o.id, o]));
+  const offersById = Object.fromEntries((offers as Array<{ id: string; name: string; type: string; status: string }>).map((o) => [o.id, o]));
 
   const now = new Date();
   const isScheduled = personalization.startsAt && personalization.startsAt > now;
@@ -117,7 +117,7 @@ export default async function PostPurchaseDetailPage({
       </div>
 
       {/* Content */}
-      <div className="max-w-4xl mx-auto px-6 py-6 space-y-5">
+      <div className=" mx-auto px-6 py-6 space-y-5">
 
         {/* Targeting Rules */}
         <div className="bg-white rounded-xl border border-neutral-100 overflow-hidden">

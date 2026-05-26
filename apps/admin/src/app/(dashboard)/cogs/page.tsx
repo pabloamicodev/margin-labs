@@ -16,9 +16,10 @@ async function getData(shopDomain: string) {
   });
   if (!shop) return null;
 
-  const [{ items, total }, coverage] = await Promise.all([
+  const [{ items, total }, coverage, lastSync] = await Promise.all([
     cogsService.list(shop.id, { page: 1, limit: 50 }),
     cogsService.getCoverage(shop.id),
+    cogsService.getLastSyncStatus(shop.id),
   ]);
 
   const settings = (shop.settings ?? {}) as Record<string, unknown>;
@@ -30,6 +31,7 @@ async function getData(shopDomain: string) {
     items,
     total,
     coverage,
+    lastSync,
   };
 }
 
@@ -40,7 +42,7 @@ export default async function CogsPage() {
   if (!data) {
     return (
       <div className="flex-1 overflow-auto bg-neutral-50">
-        <div className="max-w-5xl mx-auto px-8 py-8">
+        <div className=" mx-auto px-8 py-8">
           <Card className="text-center py-12">
             <p className="text-neutral-500">Shop not found</p>
           </Card>
@@ -51,7 +53,7 @@ export default async function CogsPage() {
 
   return (
     <div className="flex-1 overflow-auto bg-neutral-50">
-      <div className="max-w-5xl mx-auto px-8 py-8 space-y-6">
+      <div className=" mx-auto px-8 py-8 space-y-6">
         <div>
           <h1 className="text-xl font-semibold text-neutral-900 tracking-tight">COGS & Profit</h1>
           <p className="text-sm text-neutral-400 mt-0.5">Configure cost of goods sold for accurate profit analytics</p>
@@ -74,6 +76,7 @@ export default async function CogsPage() {
           initialItems={data.items}
           initialTotal={data.total}
           initialCoverage={data.coverage}
+          initialLastSync={data.lastSync}
           currencyCode={data.currencyCode}
         />
         </div>

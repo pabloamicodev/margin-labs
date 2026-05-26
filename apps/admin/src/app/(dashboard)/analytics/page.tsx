@@ -84,8 +84,11 @@ async function getAnalyticsOverview(shopDomain: string) {
   // Build 30-day time series
   const days = buildDaySeries(30);
 
+  type RawRevRec = { attributedAt: Date; netRevenue: number; grossProfit: number | null };
+  type RawParRec = { firstSeenAt: Date };
+
   const revenueByDay: DailyPoint[] = days.map((day) => {
-    const dayRecords = rawRevenue.filter(
+    const dayRecords = (rawRevenue as RawRevRec[]).filter(
       (r) => r.attributedAt.toISOString().slice(0, 10) === day
     );
     return {
@@ -98,13 +101,13 @@ async function getAnalyticsOverview(shopDomain: string) {
   const participantsByDay: DailyPoint[] = days.map((day) => ({
     date: day,
     revenue: 0,
-    participants: rawParticipants.filter(
+    participants: (rawParticipants as RawParRec[]).filter(
       (p) => p.firstSeenAt.toISOString().slice(0, 10) === day
     ).length,
   }));
 
   const profitByDay: DailyProfitPoint[] = days.map((day) => {
-    const dayRecords = rawRevenue.filter(
+    const dayRecords = (rawRevenue as RawRevRec[]).filter(
       (r) => r.attributedAt.toISOString().slice(0, 10) === day
     );
     return {
@@ -135,7 +138,7 @@ export default async function AnalyticsPage() {
   if (!data) {
     return (
       <div className="flex-1 overflow-auto bg-neutral-50">
-        <div className="max-w-5xl mx-auto px-8 py-8">
+        <div className=" mx-auto px-8 py-8">
           <p className="text-sm text-neutral-400">Shop not found.</p>
         </div>
       </div>
@@ -144,7 +147,7 @@ export default async function AnalyticsPage() {
 
   return (
     <div className="flex-1 overflow-auto bg-neutral-50">
-      <div className="max-w-5xl mx-auto px-8 py-8 space-y-6">
+      <div className=" mx-auto px-8 py-8 space-y-6">
 
         <div className="flex items-start justify-between">
           <div>
