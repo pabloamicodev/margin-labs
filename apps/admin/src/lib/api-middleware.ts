@@ -169,7 +169,12 @@ export async function withShopAuth(
       );
     }
 
-    return await handler(shop.shopId, shop.actorId);
+    const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+    const { requestStorage } = await import("@/lib/request-context");
+    return await requestStorage.run(
+      { requestId, shopId: shop.shopId, shopDomain: shop.shopDomain },
+      () => handler(shop.shopId, shop.actorId)
+    );
   } catch (error) {
     if (error instanceof Error) {
       // Domain validation errors
@@ -185,7 +190,6 @@ export async function withShopAuth(
       }
     }
 
-    console.error("[API Error]", error);
     Sentry.captureException(error);
     logger.error("[API Error]", error instanceof Error ? error : undefined, {
       path: request.nextUrl.pathname,

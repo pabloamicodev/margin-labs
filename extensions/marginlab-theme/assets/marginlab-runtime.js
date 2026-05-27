@@ -45,6 +45,7 @@
     apiBase: "",
     visitorId: "",
     sessionId: "",
+    customerId: null,
     onReadyCallbacks: [],
   };
 
@@ -83,6 +84,7 @@
       state.config = config;
       runExperiments(config);
       runPersonalizations(config);
+      runOffers(config);
       state.initialized = true;
       removeAntiFlicker();
       flushReadyCallbacks();
@@ -206,7 +208,12 @@
 
       // Skip if already assigned
       if (state.assignments[exp.id]) {
-        applyVariantModifications(exp, state.assignments[exp.id]);
+        var alreadyAssigned = state.assignments[exp.id];
+        if (exp.type === "SPLIT_URL_TEST") {
+          handleSplitUrlRedirect(exp, alreadyAssigned, config);
+        } else {
+          applyVariantModifications(exp, alreadyAssigned);
+        }
         return;
       }
 
@@ -237,8 +244,12 @@
       state.assignments[exp.id] = variant;
       persistAssignments();
 
-      // Apply modifications
-      applyVariantModifications(exp, variant);
+      // Apply modifications (or redirect for split URL tests)
+      if (exp.type === "SPLIT_URL_TEST") {
+        handleSplitUrlRedirect(exp, variant, config);
+      } else {
+        applyVariantModifications(exp, variant);
+      }
 
       // Track assignment event
       trackEvent("experiment_assigned", "CUSTOM", {
@@ -251,6 +262,46 @@
       // Push to integrations
       pushToIntegrations(exp, variant);
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Split URL redirect
+  // ---------------------------------------------------------------------------
+  function handleSplitUrlRedirect(exp, variant, config) {
+    // Control stays on the original page
+    if (variant.isControl || !variant.redirectUrl) return;
+
+    // Respect kill switch
+    if (config.killSwitches && config.killSwitches.splitUrlRedirectsDisabled) return;
+
+    // Loop protection: already completed a redirect in this navigation
+    if (getQueryParam("ml_redirected") === "1") return;
+
+    var targetUrl = variant.redirectUrl;
+
+    // If already on the target URL (visitor bookmarked it), skip
+    var targetBase = targetUrl.split("?")[0];
+    var currentBase = window.location.pathname;
+    if (targetBase.startsWith("/") && currentBase === targetBase) return;
+    if (targetBase.startsWith("http") && window.location.href.startsWith(targetBase)) return;
+
+    var splitUrlConfig = exp.splitUrlConfig || {};
+
+    // Preserve current page's query params (minus ml_redirected itself)
+    if (splitUrlConfig.preserveQueryParams !== false) {
+      var currentSearch = window.location.search
+        .replace(/[?&]ml_redirected=[^&]*/g, "")
+        .replace(/^\?&/, "?")
+        .replace(/\?$/, "");
+      if (currentSearch) {
+        targetUrl += (targetUrl.includes("?") ? "&" : "?") + currentSearch.slice(1);
+      }
+    }
+
+    // Mark as redirected to prevent loops on the landing page
+    targetUrl += (targetUrl.includes("?") ? "&" : "?") + "ml_redirected=1";
+
+    window.location.replace(targetUrl);
   }
 
   // ---------------------------------------------------------------------------
@@ -306,6 +357,12 @@
     mods.forEach(function (mod) {
       try {
         applyMod(mod, exp, variant);
+        // Schedule retry for selector-based mods that found nothing (lazy-loaded content)
+        if (mod.selector && SELECTOR_MOD_TYPES.indexOf(mod.type) !== -1) {
+          if (!querySelectorAll(mod.selector).length) {
+            scheduleModRetry(mod, 0);
+          }
+        }
       } catch (e) {
         if (state.debugMode) {
           console.error("[MarginLab] Modification error:", mod, e);
@@ -399,6 +456,17 @@
         injectCSS(mod.css || mod.value, exp.id + "-" + variant.id);
         break;
 
+      case "js_inject": {
+        var jsCode = mod.js || mod.value;
+        if (jsCode) {
+          var injectedScript = document.createElement("script");
+          injectedScript.setAttribute("data-ml-injected", "1");
+          injectedScript.textContent = jsCode;
+          document.head && document.head.appendChild(injectedScript);
+        }
+        break;
+      }
+
       case "redirect":
         if (mod.url && window.location.href !== mod.url) {
           var targetUrl = mod.url;
@@ -446,15 +514,42 @@
     setTimeout(function () { observer.disconnect(); }, 10000);
   }
 
+  var SELECTOR_MOD_TYPES = [
+    "text_replace", "image_replace", "link_replace",
+    "hide_element", "show_element", "add_class", "remove_class", "replace_html",
+  ];
+
   function applyModToNode(root, mod) {
-    if (mod.type === "text_replace" && mod.selector) {
-      root.querySelectorAll && root.querySelectorAll(mod.selector).forEach(function (el) {
-        if (!el.getAttribute("data-ml-modified")) {
-          el.textContent = mod.value;
-          el.setAttribute("data-ml-modified", "1");
-        }
-      });
-    }
+    if (!mod.selector || SELECTOR_MOD_TYPES.indexOf(mod.type) === -1) return;
+    root.querySelectorAll && root.querySelectorAll(mod.selector).forEach(function (el) {
+      if (el.getAttribute("data-ml-modified")) return;
+      switch (mod.type) {
+        case "text_replace": el.textContent = mod.value; break;
+        case "image_replace": if (el.tagName === "IMG") el.src = mod.value; break;
+        case "link_replace": if (el.tagName === "A") el.href = mod.value; break;
+        case "hide_element": el.style.display = "none"; break;
+        case "show_element": el.style.display = ""; break;
+        case "add_class": el.classList.add.apply(el.classList, mod.value.split(" ")); break;
+        case "remove_class": el.classList.remove.apply(el.classList, mod.value.split(" ")); break;
+        case "replace_html": el.innerHTML = sanitizeHTML(mod.value); break;
+      }
+      el.setAttribute("data-ml-modified", "1");
+    });
+  }
+
+  // Retry applying a modification on elements that may not yet exist in the DOM.
+  // Tries up to 3 times with increasing delays (500ms, 1000ms, 2000ms).
+  function scheduleModRetry(mod, retryCount) {
+    if (!mod.selector || retryCount >= 3) return;
+    var delay = 500 * Math.pow(2, retryCount);
+    setTimeout(function () {
+      var found = querySelectorAll(mod.selector);
+      if (found.length) {
+        applyModToNode(document.body, mod);
+      } else {
+        scheduleModRetry(mod, retryCount + 1);
+      }
+    }, delay);
   }
 
   // ---------------------------------------------------------------------------
@@ -524,6 +619,16 @@
           if (response.ok) {
             response.clone().json().then(function (cartData) {
               syncAssignmentsToCart(cartData.token);
+              // Update cached item count for offer/personalization signals
+              try {
+                if (cartData.item_count !== undefined) {
+                  localStorage.setItem(CART_ITEMS_KEY, String(cartData.item_count));
+                }
+                if (cartData.total_price !== undefined) {
+                  window.__ml_cart_total = cartData.total_price;
+                }
+              } catch (e) {}
+              document.dispatchEvent(new CustomEvent("marginlab:cart_updated", { detail: cartData }));
             }).catch(function () {});
           }
         }).catch(function () {});
@@ -618,29 +723,45 @@
     if (!state.events.length) return;
     var batch = state.events.slice();
     state.events = [];
+    sendEventBatch(batch, 0);
+  }
 
-    var payload = JSON.stringify({
+  function sendEventBatch(batch, attempt) {
+    var MAX_ATTEMPTS = 3;
+    var RETRY_DELAYS = [1000, 2000, 4000];
+
+    var payloadObj = {
       shopDomain: state.shopDomain,
       visitorId: state.visitorId,
       sessionId: state.sessionId,
       events: batch,
-    });
+    };
+    if (state.customerId) payloadObj.customerId = state.customerId;
+    var payload = JSON.stringify(payloadObj);
 
-    // Use sendBeacon when available (page unload safe)
-    if (navigator.sendBeacon) {
-      var blob = new Blob([payload], { type: "application/json" });
-      navigator.sendBeacon(state.apiBase + "/api/runtime/events", blob);
-    } else {
-      fetch(state.apiBase + "/api/runtime/events", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shop-Domain": state.shopDomain,
-        },
-        body: payload,
-        keepalive: true,
-      }).catch(function () {});
+    // On unload/hide we can only use sendBeacon (no retry possible)
+    if (attempt === 0 && navigator.sendBeacon) {
+      var sent = navigator.sendBeacon(state.apiBase + "/api/runtime/events", new Blob([payload], { type: "application/json" }));
+      if (sent) return;
+      // sendBeacon returns false if the queue is full — fall through to fetch
     }
+
+    fetch(state.apiBase + "/api/runtime/events", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shop-Domain": state.shopDomain,
+      },
+      body: payload,
+      keepalive: true,
+    }).catch(function () {
+      if (attempt < MAX_ATTEMPTS - 1) {
+        setTimeout(function () {
+          sendEventBatch(batch, attempt + 1);
+        }, RETRY_DELAYS[attempt]);
+      }
+      // After max attempts, events are dropped — acceptable data loss on persistent network failure
+    });
   }
 
   // Flush on page unload
@@ -803,7 +924,23 @@
       },
       getVisitorId: function () { return state.visitorId; },
       getSessionId: function () { return state.sessionId; },
+      /**
+       * Link the current visitor to a known customer identity.
+       * Call this after login or when a customer ID becomes available.
+       * The customer ID is attached to subsequent events for attribution.
+       */
+      identify: function (customerId, properties) {
+        state.customerId = String(customerId);
+        trackEvent("customer_identified", "CUSTOM", Object.assign(
+          { customerId: state.customerId },
+          properties || {}
+        ));
+      },
     };
+
+    // Fire a DOM event so external scripts can listen for MarginLab readiness
+    // without polling. Used by the custom events snippet template.
+    document.dispatchEvent(new CustomEvent("marginlab:ready"));
   }
 
   function flushReadyCallbacks() {
@@ -1131,6 +1268,352 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Offer engine
+  // ---------------------------------------------------------------------------
+  var OFFER_SHOWN_KEY = "_ml_offer_shown"; // sessionStorage set of offerId strings
+
+  /**
+   * Evaluate offer trigger rules.
+   * Supports: cart_value (gte/lte), cart_item_count (gte/lte),
+   *           url_contains, url_matches_path, visitor_type (equals)
+   */
+  function evaluateOfferTriggers(rules) {
+    if (!rules || rules.length === 0) return true;
+    var cartValue = getCartValue();
+    var cartItemCount = getCartItemCount();
+    return rules.every(function (rule) {
+      var field = rule.field;
+      var op = rule.operator;
+      var val = rule.value;
+      if (field === "cart_value") {
+        if (op === "gte") return cartValue >= val;
+        if (op === "lte") return cartValue <= val;
+        if (op === "gt")  return cartValue > val;
+        if (op === "lt")  return cartValue < val;
+      }
+      if (field === "cart_item_count") {
+        if (op === "gte") return cartItemCount >= val;
+        if (op === "lte") return cartItemCount <= val;
+        if (op === "gt")  return cartItemCount > val;
+        if (op === "lt")  return cartItemCount < val;
+      }
+      if (field === "url_contains") {
+        return window.location.href.indexOf(String(val)) !== -1;
+      }
+      if (field === "url_matches_path") {
+        return window.location.pathname === String(val);
+      }
+      if (field === "visitor_type") {
+        var isReturning = !!localStorage.getItem("_ml_returning");
+        var vt = isReturning ? "returning" : "new";
+        return op === "equals" ? vt === val : vt !== val;
+      }
+      // URL param trigger — e.g. for CAMPAIGN_LINK_OFFER
+      if (field === "url_param") {
+        return getQueryParam(String(val)) !== null;
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Main offer runner. Called once after config is loaded.
+   * Renders offer widgets based on type; deduplicates per session.
+   */
+  function runOffers(config) {
+    if (!config || !config.offers || !config.offers.length) return;
+    if (config.killSwitches && config.killSwitches.offerWidgetsDisabled) return;
+
+    var shownThisSession = [];
+    try {
+      shownThisSession = JSON.parse(sessionStorage.getItem(OFFER_SHOWN_KEY) || "[]");
+    } catch (e) {}
+
+    for (var i = 0; i < config.offers.length; i++) {
+      var offer = config.offers[i];
+      if (!offer || !offer.id) continue;
+      if (shownThisSession.indexOf(offer.id) !== -1) continue;
+      if (!evaluateOfferTriggers(offer.triggerRules)) continue;
+
+      var ds = offer.displaySettings || {};
+      var dr = offer.discountRules || {};
+
+      var rendered = false;
+      if (offer.type === "FREE_SHIPPING" || offer.type === "TIERED_PROGRESS_BAR") {
+        rendered = renderProgressBarOffer(offer, ds, dr);
+      } else if (
+        offer.type === "CAMPAIGN_LINK_OFFER"
+      ) {
+        rendered = renderCampaignLinkOffer(offer, ds, dr);
+      } else if (
+        offer.type === "PERCENTAGE_DISCOUNT" ||
+        offer.type === "FIXED_AMOUNT_DISCOUNT" ||
+        offer.type === "ORDER_DISCOUNT" ||
+        offer.type === "PRODUCT_DISCOUNT" ||
+        offer.type === "VOLUME_DISCOUNT" ||
+        offer.type === "BUY_X_GET_Y"
+      ) {
+        rendered = renderDiscountOffer(offer, ds, dr);
+      }
+
+      if (rendered) {
+        trackEvent("offer_impression", "PAGE_VIEW", { offerId: offer.id, offerType: offer.type });
+        try {
+          shownThisSession.push(offer.id);
+          sessionStorage.setItem(OFFER_SHOWN_KEY, JSON.stringify(shownThisSession));
+        } catch (e) {}
+      }
+    }
+  }
+
+  /**
+   * Render a free-shipping / tiered progress bar offer.
+   * Shows a floating bar at the bottom: "Add $X more for free shipping!"
+   */
+  function renderProgressBarOffer(offer, ds, dr) {
+    var domId = "ml-offer-progress-" + offer.id;
+    if (document.getElementById(domId)) return false;
+
+    var threshold = dr.threshold || ds.threshold || 0;
+    var cartValue = getCartValue();
+    var remaining = Math.max(0, threshold - cartValue);
+    var pct = threshold > 0 ? Math.min(100, (cartValue / threshold) * 100) : 100;
+
+    var title = ds.title || (remaining > 0
+      ? "Add " + formatMoney(remaining) + " more for free shipping!"
+      : "You've unlocked free shipping!");
+    var barColor = ds.color || "#1a56db";
+    var bgColor = ds.bgColor || "#f0f4ff";
+
+    var bar = document.createElement("div");
+    bar.id = domId;
+    bar.setAttribute("data-ml-offer", offer.id);
+    bar.style.cssText = [
+      "position:fixed", "bottom:0", "left:0", "right:0", "z-index:99998",
+      "background:" + bgColor, "padding:10px 16px 12px",
+      "box-shadow:0 -2px 8px rgba(0,0,0,0.12)", "font-family:inherit",
+      "font-size:14px", "text-align:center",
+    ].join(";");
+
+    var label = document.createElement("div");
+    label.textContent = title;
+    label.style.cssText = "margin-bottom:6px;font-weight:600;color:#1a1a1a";
+
+    var track = document.createElement("div");
+    track.style.cssText = "background:#dde3f0;border-radius:999px;height:8px;overflow:hidden;max-width:480px;margin:0 auto";
+    var fill = document.createElement("div");
+    fill.style.cssText = [
+      "height:100%", "border-radius:999px",
+      "background:" + barColor,
+      "width:" + pct + "%",
+      "transition:width 0.4s ease",
+    ].join(";");
+    track.appendChild(fill);
+
+    var close = document.createElement("button");
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Close");
+    close.style.cssText = [
+      "position:absolute", "top:8px", "right:12px",
+      "background:none", "border:none", "font-size:18px",
+      "cursor:pointer", "color:#666", "line-height:1", "padding:0",
+    ].join(";");
+    close.addEventListener("click", function () {
+      bar.remove();
+      trackEvent("offer_dismissed", "CLICK", { offerId: offer.id });
+    });
+
+    bar.style.position = "relative";
+    bar.appendChild(label);
+    bar.appendChild(track);
+    bar.appendChild(close);
+    document.body.appendChild(bar);
+
+    // Update progress bar when cart changes
+    document.addEventListener("marginlab:cart_updated", function () {
+      var newCart = getCartValue();
+      var newRemaining = Math.max(0, threshold - newCart);
+      var newPct = threshold > 0 ? Math.min(100, (newCart / threshold) * 100) : 100;
+      fill.style.width = newPct + "%";
+      label.textContent = newRemaining > 0
+        ? "Add " + formatMoney(newRemaining) + " more for free shipping!"
+        : "You've unlocked free shipping!";
+    });
+
+    return true;
+  }
+
+  /**
+   * Render a discount popup offer (sticky banner + optional code reveal).
+   */
+  function renderDiscountOffer(offer, ds, dr) {
+    var domId = "ml-offer-discount-" + offer.id;
+    if (document.getElementById(domId)) return false;
+
+    var code = dr.code || "";
+    var title = ds.title || offer.name || "Special Offer";
+    var subtitle = ds.subtitle || ds.description || "";
+    var ctaLabel = ds.ctaLabel || (code ? "Copy code" : "Shop now");
+    var ctaUrl = ds.ctaUrl || "/collections/all";
+    var position = ds.position || "bottom-right"; // top | bottom | bottom-right
+    var accentColor = ds.color || "#1a56db";
+
+    var popup = document.createElement("div");
+    popup.id = domId;
+    popup.setAttribute("data-ml-offer", offer.id);
+
+    var isBottom = position.indexOf("bottom") !== -1;
+    var isRight = position.indexOf("right") !== -1;
+    var posCSS = isBottom
+      ? (isRight ? "bottom:16px;right:16px" : "bottom:16px;left:16px")
+      : (isRight ? "top:80px;right:16px" : "top:80px;left:16px");
+
+    popup.style.cssText = [
+      "position:fixed", posCSS, "z-index:99997",
+      "background:#fff", "border-radius:12px",
+      "box-shadow:0 4px 24px rgba(0,0,0,0.15)",
+      "padding:16px 20px", "max-width:280px", "font-family:inherit",
+      "border-top:4px solid " + accentColor,
+    ].join(";");
+
+    var heading = document.createElement("div");
+    heading.style.cssText = "font-weight:700;font-size:15px;color:#1a1a1a;margin-bottom:4px";
+    heading.textContent = title;
+
+    var subEl = document.createElement("div");
+    subEl.style.cssText = "font-size:13px;color:#555;margin-bottom:12px";
+    subEl.textContent = subtitle;
+
+    var ctaBtn = document.createElement("a");
+    ctaBtn.style.cssText = [
+      "display:block", "text-align:center",
+      "background:" + accentColor, "color:#fff",
+      "padding:8px 12px", "border-radius:6px",
+      "font-size:13px", "font-weight:600", "text-decoration:none",
+      "cursor:pointer",
+    ].join(";");
+
+    if (code) {
+      ctaBtn.textContent = ctaLabel;
+      ctaBtn.addEventListener("click", function (e) {
+        e.preventDefault();
+        try { navigator.clipboard.writeText(code); } catch (_) {}
+        ctaBtn.textContent = "Copied: " + code;
+        ctaBtn.style.background = "#16a34a";
+        trackEvent("offer_claimed", "CLICK", { offerId: offer.id, code: code });
+        setTimeout(function () {
+          if (ctaUrl && ctaUrl !== "#") window.location.href = ctaUrl;
+        }, 1200);
+      });
+    } else {
+      ctaBtn.href = ctaUrl;
+      ctaBtn.textContent = ctaLabel;
+      ctaBtn.addEventListener("click", function () {
+        trackEvent("offer_claimed", "CLICK", { offerId: offer.id });
+      });
+    }
+
+    var closeBtn = document.createElement("button");
+    closeBtn.textContent = "×";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.style.cssText = [
+      "position:absolute", "top:8px", "right:10px",
+      "background:none", "border:none", "font-size:18px",
+      "cursor:pointer", "color:#999", "line-height:1", "padding:0",
+    ].join(";");
+    closeBtn.addEventListener("click", function () {
+      popup.remove();
+      trackEvent("offer_dismissed", "CLICK", { offerId: offer.id });
+    });
+
+    popup.style.position = "fixed";
+    popup.appendChild(closeBtn);
+    popup.appendChild(heading);
+    if (subtitle) popup.appendChild(subEl);
+    popup.appendChild(ctaBtn);
+    document.body.appendChild(popup);
+    return true;
+  }
+
+  /**
+   * Handle CAMPAIGN_LINK_OFFER: activated when a URL param is present.
+   * Shows a sticky top banner with the offer message and optional code.
+   */
+  function renderCampaignLinkOffer(offer, ds, dr) {
+    var domId = "ml-offer-campaign-" + offer.id;
+    if (document.getElementById(domId)) return false;
+
+    // Activate only when the designated URL param is present
+    var paramName = (dr.urlParam || ds.urlParam || "offer");
+    var paramValue = getQueryParam(paramName);
+    if (!paramValue) return false;
+
+    var code = dr.code || ds.code || paramValue;
+    var title = ds.title || offer.name || "Special offer activated!";
+    var subtitle = ds.subtitle || (code ? "Use code: " + code : "");
+    var ctaLabel = ds.ctaLabel || "Shop now";
+    var ctaUrl = ds.ctaUrl || "/collections/all";
+    var accentColor = ds.color || "#16a34a";
+
+    var banner = document.createElement("div");
+    banner.id = domId;
+    banner.setAttribute("data-ml-offer", offer.id);
+    banner.style.cssText = [
+      "position:fixed", "top:0", "left:0", "right:0", "z-index:99999",
+      "background:" + accentColor, "color:#fff",
+      "padding:10px 16px", "font-size:14px",
+      "display:flex", "align-items:center", "justify-content:center",
+      "gap:12px", "box-shadow:0 2px 8px rgba(0,0,0,0.15)",
+    ].join(";");
+
+    var text = document.createElement("span");
+    text.innerHTML =
+      "<strong>" + escapeHtml(title) + "</strong>" +
+      (subtitle ? " &mdash; " + escapeHtml(subtitle) : "");
+
+    var shopBtn = document.createElement("a");
+    shopBtn.href = ctaUrl;
+    shopBtn.textContent = ctaLabel;
+    shopBtn.style.cssText =
+      "background:#fff;color:" + accentColor + ";padding:4px 12px;border-radius:4px;font-weight:600;text-decoration:none;font-size:13px";
+    shopBtn.addEventListener("click", function () {
+      trackEvent("offer_claimed", "CLICK", { offerId: offer.id, code: code });
+    });
+
+    var closeBtn = document.createElement("button");
+    closeBtn.textContent = "×";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.style.cssText =
+      "background:none;border:none;color:#fff;font-size:18px;cursor:pointer;opacity:0.7;margin-left:8px;padding:0 4px";
+    closeBtn.addEventListener("click", function () {
+      banner.remove();
+      trackEvent("offer_dismissed", "CLICK", { offerId: offer.id });
+    });
+
+    banner.appendChild(text);
+    banner.appendChild(shopBtn);
+    banner.appendChild(closeBtn);
+    document.body.prepend(banner);
+    return true;
+  }
+
+  /**
+   * Format a monetary value for display (e.g. 12.5 → "$12.50").
+   * Uses the page currency if detectable, otherwise falls back to "$".
+   */
+  function formatMoney(amount) {
+    var symbol = "$";
+    try {
+      var curr = (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || "USD";
+      symbol = new Intl.NumberFormat("en", { style: "currency", currency: curr })
+        .format(0)
+        .replace(/[\d.,\s]/g, "")
+        .trim() || "$";
+    } catch (e) {}
+    return symbol + parseFloat(amount).toFixed(2);
+  }
+
   function escapeHtml(str) {
     return String(str)
       .replace(/&/g, "&amp;")
@@ -1229,6 +1712,8 @@
    * Returns 0 if unavailable — ACR will still trigger, just without the cart_value rule.
    */
   function getCartValue() {
+    // Most-recent cart response cached from AJAX intercept
+    if (window.__ml_cart_total !== undefined) return window.__ml_cart_total / 100;
     if (window.cart && window.cart.total_price) {
       return window.cart.total_price / 100; // Shopify uses cents
     }
