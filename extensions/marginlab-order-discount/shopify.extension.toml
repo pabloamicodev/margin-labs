@@ -1,16 +1,17 @@
-api_version = "2025-04"
+api_version = "2026-01"
 
 [[extensions]]
 name = "MarginLab Order Discount"
 handle = "marginlab-order-discount"
-uid = "01574890-27d1-c3bd-c86a-e976c150c352a3a77dff"
 type = "function"
-function_type = "order_discounts"
+uid = "b3f8a1c2-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
+description = "Applies experiment variant discounts and offer rules to order totals. Reads cart attributes (_ml_exp_*) to look up the assigned variant, then applies the configured discount from the metafield."
 
-[extensions.build]
-command = "cargo wasi build --release"
-path = "target/wasm32-wasi/release/marginlab_order_discount.wasm"
+  [[extensions.targeting]]
+  target = "purchase.order-discount.run"
+  input_query = "src/run.graphql"
+  export = "run"
 
-[extensions.ui.paths]
-create = "/marginlab/functions/order-discount/new"
-details = "/marginlab/functions/order-discount/:id"
+  [extensions.build]
+  command = ""
+  path = "dist/function.wasm"

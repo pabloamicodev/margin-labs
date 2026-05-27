@@ -1,14 +1,18 @@
 query RunInput {
   cart {
-    attributes {
-      key
+    attribute(key: "_ml_experiments") {
       value
     }
+    deliveryGroups {
+      deliveryOptions {
+        handle
+        title
+      }
+    }
   }
-  deliveryGroups {
-    deliveryOptions {
-      handle
-      title
+  deliveryCustomization {
+    metafield(namespace: "$app:marginlab", key: "shipping-customization-config") {
+      jsonValue
     }
   }
 }
