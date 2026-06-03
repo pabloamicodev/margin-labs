@@ -37,6 +37,7 @@ const REQUIRED_WEBHOOKS = [
   { topic: "refunds/create", path: "/api/webhooks/shopify" },
   { topic: "checkouts/update", path: "/api/webhooks/shopify" },
   { topic: "products/update", path: "/api/webhooks/shopify" },
+  { topic: "themes/publish", path: "/api/webhooks/shopify" },
   { topic: "app/uninstalled", path: "/api/webhooks/shopify" },
   { topic: "app_subscriptions/update", path: "/api/webhooks/shopify" },
   { topic: "customers/data_request", path: "/api/webhooks/shopify" },
@@ -126,7 +127,7 @@ export async function GET(request: NextRequest) {
 
   // Fetch shop info from Shopify
   const shopInfoRes = await fetch(
-    `https://${shop}/admin/api/2025-04/shop.json`,
+    `https://${shop}/admin/api/${process.env.SHOPIFY_API_VERSION ?? "2025-04"}/shop.json`,
     { headers: { "X-Shopify-Access-Token": access_token } }
   );
   const shopInfo = shopInfoRes.ok
@@ -175,7 +176,8 @@ export async function GET(request: NextRequest) {
   if (hostParam) {
     try {
       const decoded = Buffer.from(hostParam, "base64").toString("utf8");
-      // decoded is like "admin.shopify.com/store/hpn-supplements"
+      // decoded is like "admin.shopify.com/store/hpn-supplements" — validate before use
+      if (!/^admin\.shopify\.com\//.test(decoded)) throw new Error("Invalid host");
       redirectTarget = `https://${decoded}/apps/checkout-redo-engine`;
     } catch {
       redirectTarget = `https://${shop}/admin/apps/checkout-redo-engine`;

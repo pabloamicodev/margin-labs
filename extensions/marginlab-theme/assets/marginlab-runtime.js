@@ -679,11 +679,15 @@
     // (Cart.attributes plural is unavailable in that function API)
     attributes["_ml_experiments"] = JSON.stringify(experimentsMap);
 
-    fetch("/cart/update.js", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attributes: attributes }),
-    }).catch(function () {});
+    // Use XHR instead of fetch to bypass window.fetch interceptors (our own
+    // cart-change hook and third-party overrides like BOGOS) — prevents the
+    // infinite loop where our own /cart/update.js write re-triggers sync.
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", "/cart/update.js");
+      xhr.setRequestHeader("Content-Type", "application/json");
+      xhr.send(JSON.stringify({ attributes: attributes }));
+    } catch (e) {}
   }
 
   // ---------------------------------------------------------------------------

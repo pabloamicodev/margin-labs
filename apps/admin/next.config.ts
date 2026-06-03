@@ -1,26 +1,26 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 import { withSentryConfig } from "@sentry/nextjs";
+
+const sentryOrg = process.env.SENTRY_ORG?.trim();
+const sentryProject = process.env.SENTRY_PROJECT?.trim();
+const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN?.trim();
+
+// Opt-in uploads: avoids failing production builds when Sentry project/org/token are missing or incorrect.
+const sentryUploadEnabled = process.env.SENTRY_ENABLE_UPLOADS === "true";
+const canUploadSentryArtifacts =
+  sentryUploadEnabled && !!sentryOrg && !!sentryProject && !!sentryAuthToken;
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   serverExternalPackages: ["@prisma/client"],
-
-  // Prevent webpack/watchpack from trying to stat Windows OS-reserved files
-  // at the root of C:\ (DumpStack.log.tmp, hiberfil.sys, pagefile.sys, swapfile.sys)
-  webpack(config) {
-    config.watchOptions = {
-      ...config.watchOptions,
-      ignored: /node_modules|[/\\]C:[/\\](DumpStack\.log\.tmp|hiberfil\.sys|pagefile\.sys|swapfile\.sys)/,
-    };
-    return config;
-  },
+  outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
   // Shopify App Bridge requires these headers
   async headers() {
     return [
       {
         source: "/(.*)",
         headers: [
-          { key: "X-Frame-Options", value: "ALLOWALL" },
           {
             key: "Content-Security-Policy",
             value: [
@@ -30,6 +30,7 @@ const nextConfig: NextConfig = {
               "https://partner.shopify.com",
             ].join(" "),
           },
+          { key: "X-Content-Type-Options", value: "nosniff" },
         ],
       },
       // Runtime config endpoint: allow Shopify storefronts to fetch
@@ -48,25 +49,31 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withSentryConfig(nextConfig, {
-  // Sentry organisation / project (set these in .env)
-  org: process.env.SENTRY_ORG,
-  project: process.env.SENTRY_PROJECT,
-  authToken: process.env.SENTRY_AUTH_TOKEN,
+const sentryConfig = {
+  // Sentry organisation / project (trim to avoid accidental whitespace/newline issues)
+  org: sentryOrg,
+  project: sentryProject,
+  authToken: sentryAuthToken,
+
+  // Skip Sentry telemetry from build tooling.
+  telemetry: false,
 
   // Keep source maps private (do not upload to CDN)
-  sourcemaps: { deleteSourcemapsAfterUpload: true },
+  sourcemaps: { deleteSourcemapsAfterUpload: canUploadSentryArtifacts },
 
   // Suppress verbose Sentry build output
   silent: !process.env.CI,
 
   webpack: {
-    // Tree-shake the Sentry debug logger in production builds
-    treeshake: { removeDebugLogging: true },
-
     // Automatically instrument server-side routes
     autoInstrumentServerFunctions: true,
     autoInstrumentMiddleware: true,
     autoInstrumentAppDirectory: true,
+    // Tree-shake the Sentry logger in production
+    treeshake: { removeDebugLogging: true },
   },
-});
+};
+
+export default canUploadSentryArtifacts
+  ? withSentryConfig(nextConfig, sentryConfig)
+  : nextConfig;

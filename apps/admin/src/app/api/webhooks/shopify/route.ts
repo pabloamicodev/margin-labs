@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "crypto";
 import * as Sentry from "@sentry/nextjs";
 import { validateWebhook } from "@/lib/shopify";
 import { prisma } from "@/lib/prisma";
 import { cacheDel } from "@/lib/redis";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { OrderAttributionService } from "@/services/order-attribution.service";
 import { BillingService } from "@/services/billing.service";
 import { ThemeTestService } from "@/services/theme-test.service";
@@ -36,6 +38,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // Rate limit inbound webhooks per shop to prevent flooding
+  const rl = await checkRateLimit(`webhook:${shopDomain}`, RATE_LIMITS.webhook_inbound);
+  if (!rl.allowed) {
+    logger.warn("[Webhook] Rate limit exceeded — dropping webhook", { shopDomain, topic });
+    return NextResponse.json({ ok: true });
+  }
+
   let payload: unknown;
   try {
     payload = JSON.parse(rawBody) as unknown;
@@ -53,13 +62,12 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  // Process webhook asynchronously (don't await to return 200 quickly)
-  processWebhook(shop.id, shopDomain, topic, payload as Record<string, unknown>, webhookLog.id).catch(
-    (err) => {
-      Sentry.captureException(err, { tags: { webhookTopic: topic, shopDomain } });
-      logger.error("[Webhook] Processing error", err instanceof Error ? err : undefined, { topic, shopDomain });
-    }
-  );
+  try {
+    await processWebhook(shop.id, shopDomain, topic, payload as Record<string, unknown>, webhookLog.id);
+  } catch (err) {
+    Sentry.captureException(err, { tags: { webhookTopic: topic, shopDomain } });
+    logger.error("[Webhook] Processing error", err instanceof Error ? err : undefined, { topic, shopDomain });
+  }
 
   return NextResponse.json({ ok: true });
 }
@@ -76,9 +84,22 @@ async function processWebhook(
       case "orders/create":
       case "orders/updated":
       case "orders/paid":
-      case "orders/cancelled":
+      case "orders/cancelled": {
+        // Idempotency guard for orders/create — Shopify may retry on timeout/5xx.
+        // orders/updated and orders/paid are designed to be re-processed (they update, not insert).
+        if (topic === "orders/create") {
+          const shopifyOrderId = String((payload as Record<string, unknown>).id ?? "");
+          if (shopifyOrderId) {
+            const existing = await prisma.orderAttribution.findFirst({
+              where: { shopId, shopifyOrderId },
+              select: { id: true },
+            });
+            if (existing) break;
+          }
+        }
         await orderAttributionService.processOrder(shopId, payload);
         break;
+      }
 
       case "refunds/create":
         await orderAttributionService.processRefund(shopId, payload);
@@ -194,19 +215,24 @@ async function processWebhook(
             attributedAt: true,
           },
         });
-        const events = await prisma.event.findMany({
-          where: {
-            shopId,
-            visitorId: { in: orders.map((o: (typeof orders)[number]) => o.visitorId).filter(Boolean) as string[] },
-          },
-          select: { eventName: true, eventType: true, occurredAt: true, url: true },
-        });
+        const visitorIds = orders.map((o: (typeof orders)[number]) => o.visitorId).filter(Boolean) as string[];
+        const [events, assignments] = await Promise.all([
+          prisma.event.findMany({
+            where: { shopId, visitorId: { in: visitorIds } },
+            select: { eventName: true, eventType: true, occurredAt: true, url: true },
+          }),
+          prisma.experimentAssignment.findMany({
+            where: { shopId, visitorId: { in: visitorIds } },
+            select: { experimentId: true, variantId: true, firstSeenAt: true, lastSeenAt: true },
+          }),
+        ]);
         logger.info("[GDPR customers/data_request]", {
           shopDomain,
           customerId,
-          customerEmail,
+          customerEmailHash: createHash("sha256").update(customerEmail).digest("hex"),
           orders: orders.length,
           events: events.length,
+          assignments: assignments.length,
         });
         // Shopify does not require us to send this data anywhere — just acknowledge receipt.
         // For App Store compliance the log above is the audit trail.
@@ -218,18 +244,20 @@ async function processWebhook(
         const redactCustomer = (payload as Record<string, unknown>).customer as Record<string, unknown> | undefined;
         const customerIdToRedact = String(redactCustomer?.id ?? "");
         if (customerIdToRedact) {
-          // Nullify customerId on order attributions (keep aggregate metrics, remove PII)
-          await prisma.orderAttribution.updateMany({
-            where: { shopId, customerId: customerIdToRedact },
-            data: { customerId: null, visitorId: null, sessionId: null, cartToken: null, checkoutToken: null },
-          });
-          // Delete raw events linked to the same visitor IDs
-          // (visitor IDs are already anonymised UUIDs but Shopify may still request deletion)
+          // Collect visitorIds BEFORE nullifying — updateMany wipes them, so findMany after returns 0 rows
           const affectedOrders = await prisma.orderAttribution.findMany({
             where: { shopId, customerId: customerIdToRedact },
             select: { visitorId: true },
           });
           const visitorIds = affectedOrders.map((o: (typeof affectedOrders)[number]) => o.visitorId).filter(Boolean) as string[];
+
+          // Nullify PII fields on order attributions (keep aggregate metrics)
+          await prisma.orderAttribution.updateMany({
+            where: { shopId, customerId: customerIdToRedact },
+            data: { customerId: null, visitorId: null, sessionId: null, cartToken: null, checkoutToken: null },
+          });
+
+          // Delete raw events and assignments linked to those visitors
           if (visitorIds.length > 0) {
             await prisma.event.deleteMany({ where: { shopId, visitorId: { in: visitorIds } } });
             await prisma.experimentAssignment.deleteMany({ where: { shopId, visitorId: { in: visitorIds } } });
